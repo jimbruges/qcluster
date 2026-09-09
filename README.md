@@ -202,18 +202,23 @@ pipeline-parallel RPC.
 The **Fit** column and the loader share one calculation, on the server:
 
 ```
-required = model file size + (ctx / 1024) x 120 MB + 250 MB
+required  = model file size + (ctx / 1024) x 120 MB + 250 MB
 available = sum over ready boards of (MemAvailable - reserve)
+            + RAM held by the currently loaded model
 ```
 
 The file size is exact, so the requirement is derived from it rather than from a
 per-model guess. Reserves are spike cushions on top of `MemAvailable`, which already
 excludes memory in use: 400 MB on the host, 200 MB per child, both overridable with
-`QCLUSTER_HOST_RESERVE_MB` and `QCLUSTER_NODE_RESERVE_MB`. Hover the Fit column to
-see the numbers behind a verdict.
+`QCLUSTER_HOST_RESERVE_MB` and `QCLUSTER_NODE_RESERVE_MB`.
 
-Because availability is measured live, freeing memory on a board (stopping unused
-apps, for instance) can move a model from *will not fit* to *needs pooling*.
+Loading a model always unloads the previous one first, so whatever the current model
+occupies counts as available for every other model. The model that is loaded shows
+*loaded now*, and any verdict that depends on freeing it is marked *(after unload)*.
+Hover the Fit column to see the numbers behind a verdict.
+
+Because availability is measured live, freeing memory on a board — stopping unused
+apps, for instance — can move a model from *will not fit* to *needs pooling*.
 
 ## Performance expectations
 
