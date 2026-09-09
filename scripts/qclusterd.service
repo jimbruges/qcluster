@@ -1,0 +1,17 @@
+[Unit]
+Description=QCluster host daemon (distributed LLM across Arduino UNO Q boards)
+After=network.target docker.service
+
+[Service]
+Type=simple
+WorkingDirectory=/home/arduino/qcluster
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/home/arduino/qcluster/daemon
+# Uncomment to require a bearer token on /v1 and mutating /api calls:
+# Environment=QCLUSTER_TOKEN=change-me
+ExecStart=/usr/bin/python3 -m qclusterd
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
