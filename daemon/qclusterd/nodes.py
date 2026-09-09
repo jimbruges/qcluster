@@ -7,6 +7,7 @@ placement planner can treat the whole cluster uniformly.
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 from dataclasses import dataclass, field
@@ -29,6 +30,7 @@ PROBE_SCRIPT = (
     "echo \"diskfree $(df -Pm /home/arduino | awk 'NR==2{print $4}')\"; "
     # -x matches the process name exactly, so pgrep cannot match its own -f pattern.
     "echo \"rpc $(pgrep -c -x rpc-server || echo 0)\"; "
+    "echo \"rpcrss $(ps -eo rss=,comm= | awk '$2==\"rpc-server\"{s+=$1} END{print s+0}')\"; "
     "echo \"board $(tr -d '\\0' < /sys/firmware/devicetree/base/compatible | head -c 32)\""
 )
 
@@ -53,6 +55,8 @@ class Node:
     caps: dict = field(default_factory=dict)
     last_seen: float = field(default_factory=time.time)
     provisioned_manifest: str | None = None
+    # RAM the currently loaded model holds here, which unloading would give back.
+    reclaimable_mb: int = 0
 
     @property
     def is_host(self) -> bool:
@@ -68,6 +72,10 @@ class Node:
         reserve = config.HOST_RESERVE_MB if self.is_host else config.NODE_RESERVE_MB
         return max(0, available - reserve)
 
+    def capacity_mb(self, reclaim: bool = False) -> int:
+        """Usable RAM, optionally counting what unloading the current model frees."""
+        return self.usable_mb() + (self.reclaimable_mb if reclaim else 0)
+
     def as_dict(self) -> dict:
         return {
             "serial": self.serial,
@@ -80,6 +88,7 @@ class Node:
             "stats": self.stats,
             "caps": self.caps,
             "usable_mb": self.usable_mb(),
+            "reclaimable_mb": self.reclaimable_mb,
             "last_seen": self.last_seen,
         }
 
@@ -146,6 +155,7 @@ def parse_probe(text: str, cpu_percent: float) -> tuple[dict, dict]:
         "disk_free_mb": int(num("diskfree")),
         "board": values.get("board", "").strip() or "unknown",
         "rpc_count": int(num("rpc")),
+        "rpc_rss_mb": int(num("rpcrss") // 1024),
     }
     return stats, caps
 
@@ -217,6 +227,7 @@ class NodeRegistry:
         return {
             "nodes": nodes,
             "total_usable_mb": sum(n.usable_mb() for n in ready),
+            "total_reclaimable_mb": sum(n.reclaimable_mb for n in ready),
             "board_count": len(nodes),
             "ready_count": len(ready),
         }
@@ -290,6 +301,7 @@ class NodeRegistry:
                 "disk_free_mb": _host_disk_free_mb(),
                 "board": "arduino,imola (host)",
             }
+            host.reclaimable_mb = _process_rss_mb("llama-server")
             host.last_seen = time.time()
 
     def _sample_child(self, node: Node) -> None:
@@ -315,6 +327,7 @@ class NodeRegistry:
         with self._lock:
             node.stats = stats
             node.caps = caps
+            node.reclaimable_mb = int(caps.pop("rpc_rss_mb", 0))
             if node.state == STATE_READY:
                 node.rpc_running = caps.pop("rpc_count", 0) > 0
             else:
@@ -362,3 +375,22 @@ def _host_disk_free_mb() -> int:
         return shutil.disk_usage("/home/arduino").free // (1024 * 1024)
     except OSError:
         return 0
+
+
+def _process_rss_mb(name: str) -> int:
+    total = 0
+    for entry in os.listdir("/proc"):
+        if not entry.isdigit():
+            continue
+        try:
+            with open(f"/proc/{entry}/comm") as fh:
+                if fh.read().strip() != name:
+                    continue
+            with open(f"/proc/{entry}/status") as fh:
+                for line in fh:
+                    if line.startswith("VmRSS:"):
+                        total += int(line.split()[1])
+                        break
+        except (OSError, ValueError):
+            continue
+    return total // 1024

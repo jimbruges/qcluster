@@ -43,6 +43,7 @@ class Placement:
         self.total_mb = total_mb
         self.needed_mb = needed_mb
         self.host_mb = 0
+        self.reclaimed = False
 
     @property
     def fits(self) -> bool:
@@ -66,6 +67,7 @@ class Placement:
             "host_usable_mb": self.host_mb,
             "fits": self.fits,
             "fits_host_alone": self.fits_host_alone,
+            "reclaimed": self.reclaimed,
             "pooled": self.pooled,
             "tensor_split": self.tensor_split(),
         }
@@ -76,11 +78,15 @@ class Placement:
         return ",".join(f"{w:.3f}" for w in self.weights)
 
 
-def plan_placement(model: Model, nodes: list, ctx_size: int | None = None) -> Placement:
+def plan_placement(model: Model, nodes: list, ctx_size: int | None = None,
+                   reclaim: bool = False) -> Placement:
     """Split the model across every ready board in proportion to its free RAM.
 
     Device order matters: llama.cpp registers RPC devices before the local backend,
     so RPC endpoints come first and the host's own share goes last.
+
+    `reclaim` counts the RAM the currently loaded model holds, because loading any
+    model unloads the previous one first.
     """
     needed = model.required_mb(ctx_size)
 
@@ -89,16 +95,17 @@ def plan_placement(model: Model, nodes: list, ctx_size: int | None = None) -> Pl
 
     endpoints = [n.rpc_endpoint for n in children]
     labels = [f"slot{n.slot} ({n.serial[:8]})" for n in children]
-    capacities = [float(n.usable_mb()) for n in children]
+    capacities = [float(n.capacity_mb(reclaim)) for n in children]
 
     if host is not None:
         labels.append("host")
-        capacities.append(float(host.usable_mb()))
+        capacities.append(float(host.capacity_mb(reclaim)))
 
     total = sum(capacities)
     weights = [c / total for c in capacities] if total > 0 else []
     placement = Placement(endpoints, weights, labels, int(total), int(needed))
-    placement.host_mb = int(host.usable_mb()) if host is not None else 0
+    placement.host_mb = int(host.capacity_mb(reclaim)) if host is not None else 0
+    placement.reclaimed = reclaim and any(n.reclaimable_mb for n in nodes)
     return placement
 
 

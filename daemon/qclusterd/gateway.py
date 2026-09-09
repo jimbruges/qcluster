@@ -85,18 +85,24 @@ class Gateway:
         """Catalog annotated with the same placement maths the loader uses, so the UI
         never has to reimplement it."""
         nodes = self.registry.all()
+        # Loading a model always unloads the current one first, so its RAM counts as
+        # available for every other model.
+        reclaim = self.engine.running
         entries = self.store.catalog_dict()
         for entry in entries:
             model = self.store.get(entry["id"])
             if not model:
                 continue
-            placement = plan_placement(model, nodes)
+            is_loaded = self.engine.model_id == model.id
+            placement = plan_placement(model, nodes, reclaim=reclaim and not is_loaded)
             entry["fit"] = {
                 "needed_mb": placement.needed_mb,
                 "pooled_mb": placement.total_mb,
                 "host_mb": placement.host_mb,
                 "fits": placement.fits,
                 "fits_host_alone": placement.fits_host_alone,
+                "reclaimed": placement.reclaimed,
+                "loaded": is_loaded,
                 "boards": len(placement.endpoints) + 1,
             }
         return entries
@@ -246,7 +252,10 @@ class _Handler(BaseHTTPRequestHandler):
             if not model:
                 return self._json(404, {"error": "unknown model"})
             ctx = int((query.get("ctx_size") or [model.ctx_size])[0])
-            placement = plan_placement(model, gw.registry.all(), ctx)
+            placement = plan_placement(
+                model, gw.registry.all(), ctx,
+                reclaim=gw.engine.running and gw.engine.model_id != model.id,
+            )
             return self._json(200, placement.as_dict())
         if path == "/api/wifi":
             return self._json(200, gw.wifi_status())
@@ -279,7 +288,10 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._json(404, {"error": "unknown model"})
             ctx = int(body.get("ctx_size") or model.ctx_size)
             threads = int(body.get("threads") or config.DEFAULT_THREADS)
-            placement = plan_placement(model, gw.registry.all(), ctx)
+            placement = plan_placement(
+                model, gw.registry.all(), ctx,
+                reclaim=gw.engine.running and gw.engine.model_id != model.id,
+            )
             if not placement.fits and not bool(body.get("force")):
                 return self._json(409, {
                     "error": "model does not fit the current cluster",

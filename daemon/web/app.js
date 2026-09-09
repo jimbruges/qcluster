@@ -95,9 +95,13 @@ function renderEngine(data) {
 }
 
 function renderNodes(data) {
+  const reclaimable = data.total_reclaimable_mb || 0;
+  const freed = reclaimable
+    ? ` &middot; <strong>${mb(data.total_usable_mb + reclaimable)}</strong> after unloading the current model`
+    : '';
   $('cluster-summary').innerHTML =
-    `<strong>${data.ready_count}</strong> of <strong>${data.board_count}</strong> boards ready · ` +
-    `<strong>${mb(data.total_usable_mb)}</strong> of pooled RAM available for a model`;
+    `<strong>${data.ready_count}</strong> of <strong>${data.board_count}</strong> boards ready &middot; ` +
+    `<strong>${mb(data.total_usable_mb)}</strong> of pooled RAM free${freed}`;
 
   $('node-cards').innerHTML = state.nodes.map((node) => {
     const s = node.stats || {};
@@ -141,12 +145,18 @@ function renderNodes(data) {
 function fitLabel(model) {
   const fit = model.fit;
   if (!fit) return '<span class="card-sub">—</span>';
-  const detail = `needs ~${mb(fit.needed_mb)}, ${mb(fit.pooled_mb)} free across ${fit.boards} board${fit.boards === 1 ? '' : 's'}`;
+  const after = fit.reclaimed ? ' after unloading the current model' : '';
+  const detail = `needs ~${mb(fit.needed_mb)}, ${mb(fit.pooled_mb)} free across `
+    + `${fit.boards} board${fit.boards === 1 ? '' : 's'}${after}`;
+  if (fit.loaded) {
+    return `<span class="fit-ok" title="${detail}">loaded now</span>`;
+  }
+  const note = fit.reclaimed ? ' <span class="card-sub">(after unload)</span>' : '';
   if (fit.fits_host_alone) {
-    return `<span class="fit-ok" title="${detail}">fits host alone</span>`;
+    return `<span class="fit-ok" title="${detail}">fits host alone</span>${note}`;
   }
   if (fit.fits) {
-    return `<span class="fit-pool" title="${detail}">needs pooling (${fit.boards} boards)</span>`;
+    return `<span class="fit-pool" title="${detail}">needs pooling (${fit.boards} boards)</span>${note}`;
   }
   return `<span class="fit-no" title="${detail}">needs ${mb(fit.needed_mb)}, ${mb(fit.pooled_mb)} free</span>`;
 }
