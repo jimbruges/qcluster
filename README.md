@@ -119,12 +119,15 @@ Open `http://<host-board-ip>:7000`.
 
 - **Cluster** — every board with live CPU, RAM, temperature and RPC state; pooled RAM
   total; reprovision and RPC restart controls; the live `llama-server` log.
-- **Models** — allowlisted catalog with a fit indicator (*fits host alone* / *needs
-  pooling* / *will not fit*), resumable downloads, and load/unload.
+- **Models** — catalog with a fit indicator (*fits host alone* / *needs pooling* /
+  *will not fit*), resumable downloads, load/unload, and a form to add any
+  Hugging Face `.gguf` link.
 - **Chat** — streaming chatbox with system prompt and sampler controls, showing
-  time-to-first-token and total latency.
+  time-to-first-token and total latency, plus a **Clear** button that empties the
+  conversation context.
 - **API** — the base URL, current model name, and copy-paste `curl` / `openai` /
   `requests` snippets.
+- **Settings** — host WiFi, board shell passwords, and decommissioning.
 
 Any OpenAI client works:
 
@@ -132,6 +135,47 @@ Any OpenAI client works:
 from openai import OpenAI
 client = OpenAI(base_url="http://<host-board-ip>:7000/v1", api_key="not-needed")
 ```
+
+### Adding your own model
+
+Paste a direct Hugging Face link to a `.gguf` file into the Models tab — both
+`/blob/` and `/resolve/` URLs work. The file size is read from Hugging Face rather
+than trusted from the browser, and the RAM estimate is derived from it so the fit
+indicator stays meaningful.
+
+### Host WiFi
+
+Only the host board needs a network: it serves the UI and downloads models. Child
+boards are reached exclusively over USB/ADB and are deliberately kept off the
+network, which is also why nothing on them listens on a network interface.
+
+The Settings tab shows the host's interface, SSID, IP and signal, and can scan for
+and join a network. This works unprivileged because the board's user is in the
+`netdev` group.
+
+### Board shell passwords
+
+QCluster runs unprivileged, so this is only needed for administrative jobs that
+genuinely require root — currently just installing the USB udev rule on the host.
+
+For each board you can save an existing sudo password (verified against the board
+before it is stored) or set one on a board that has none. Passwords are checked with
+`sudo -k` so a cached sudo timestamp cannot make an incorrect password look valid,
+are stored in `state.json` with `0600` permissions, are passed to `sudo` on **stdin**
+rather than argv or the environment, and are never logged or returned by the API.
+
+If you would rather not store a board password at all, skip this and run
+`scripts/setup-usb-permissions.sh` by hand — nothing else needs root.
+
+### Returning a board to its original state
+
+**Settings → Decommission** stops `rpc-server`, deletes `~/qcluster` from the board,
+removes the ADB port forward and — if you choose — uninstalls the QCluster Display
+app. The board is then left alone: the supervisor stops managing it and the decision
+survives daemon restarts. **Re-enable** provisions it again from scratch.
+
+Those two paths are everything QCluster ever writes to a child board, so a
+decommissioned board is back to how it started.
 
 ## Measured results
 
@@ -183,11 +227,14 @@ children is the cheapest way to make room for a bigger model.
 
 - `rpc-server` and the RPC protocol are unauthenticated by design, so they never leave
   loopback; ADB port forwarding is the only path in.
-- Model downloads are restricted to URLs in `daemon/models.json`. The API accepts a
-  catalog id, never a URL, so it cannot be turned into an arbitrary-fetch endpoint.
-- Set `QCLUSTER_TOKEN` to require a bearer token on `/v1/*` and every mutating
-  `/api/*` call. The gateway binds `0.0.0.0` so it is reachable from your LAN — set the
-  token if that network is not trusted.
+- Model downloads are restricted to `huggingface.co` and to URLs in
+  `daemon/models.json`. The API takes a catalog id or a validated Hugging Face file
+  URL, never an arbitrary host, so it cannot be turned into a general fetcher.
+- Set `QCLUSTER_TOKEN` to require a bearer token on `/v1/*` and every `/api/*` call.
+  The gateway binds `0.0.0.0` so it is reachable from your LAN — set the token if that
+  network is not trusted. The web UI will prompt for it and remember it.
+- Stored board sudo passwords are verified with `sudo -k`, kept in a `0600` file,
+  passed on stdin, and never logged or returned by the API. Storing them is optional.
 - Every `adb` invocation uses an argv list, never a shell string, and device serials are
   validated against a strict pattern before use.
 
