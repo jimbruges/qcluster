@@ -9,3 +9,4 @@ state.json
 __pycache__/
 *.pyc
 *.gguf
+build/
