@@ -1,0 +1,149 @@
+:root {
+  --bg: #0e1116;
+  --panel: #161b22;
+  --line: #262d38;
+  --text: #d7dee8;
+  --muted: #8b96a5;
+  --accent: #00b3a4;
+  --accent-dim: #0c6f66;
+  --warn: #d9822b;
+  --danger: #d2504f;
+  --ok: #3fb950;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.5 ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
+}
+
+header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  flex-wrap: wrap;
+}
+
+h1 { font-size: 18px; margin: 0; letter-spacing: 0.5px; }
+h3 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 24px 0 8px; }
+
+nav { margin-left: auto; display: flex; gap: 4px; }
+
+.tab {
+  background: none;
+  border: 1px solid transparent;
+  color: var(--muted);
+  padding: 6px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.tab:hover { color: var(--text); }
+.tab.active { color: var(--text); border-color: var(--line); background: var(--bg); }
+
+.engine-pill {
+  display: flex; align-items: center; gap: 8px;
+  padding: 4px 12px; border: 1px solid var(--line); border-radius: 999px;
+  font-size: 12px; color: var(--muted);
+}
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.dot.ready { background: var(--ok); }
+.dot.loading { background: var(--warn); animation: pulse 1s infinite; }
+.dot.error { background: var(--danger); }
+@keyframes pulse { 50% { opacity: 0.3; } }
+
+main { padding: 20px; max-width: 1100px; margin: 0 auto; }
+.panel { display: none; }
+.panel.active { display: block; }
+
+.summary { color: var(--muted); margin-bottom: 14px; font-size: 13px; }
+.summary strong { color: var(--text); }
+
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px;
+}
+.card-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.card-title { font-weight: 600; }
+.card-sub { color: var(--muted); font-size: 12px; font-family: ui-monospace, monospace; }
+
+.pill { font-size: 11px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+.pill.ready { color: var(--ok); border-color: var(--accent-dim); }
+.pill.error, .pill.lost { color: var(--danger); border-color: var(--danger); }
+.pill.provisioning, .pill.discovered { color: var(--warn); border-color: var(--warn); }
+
+.meter { margin: 8px 0; }
+.meter-label { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); }
+.meter-track { height: 6px; background: var(--bg); border-radius: 3px; overflow: hidden; margin-top: 3px; }
+.meter-fill { height: 100%; background: var(--accent); transition: width 0.4s ease; }
+.meter-fill.ram { background: var(--accent-dim); }
+
+.card-foot { display: flex; gap: 10px; font-size: 11px; color: var(--muted); margin-top: 10px; flex-wrap: wrap; }
+.card-actions { margin-top: 10px; display: flex; gap: 6px; }
+
+button {
+  background: var(--accent-dim); color: #fff; border: none;
+  padding: 7px 14px; border-radius: 6px; cursor: pointer; font-size: 13px;
+}
+button:hover { background: var(--accent); }
+button:disabled { background: var(--line); color: var(--muted); cursor: not-allowed; }
+button.danger { background: transparent; border: 1px solid var(--danger); color: var(--danger); }
+button.danger:hover { background: var(--danger); color: #fff; }
+button.small { padding: 4px 10px; font-size: 12px; }
+
+.row { margin-top: 16px; }
+.controls { display: flex; gap: 14px; align-items: flex-end; margin-bottom: 16px; flex-wrap: wrap; }
+.controls label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.controls label.grow { flex: 1; min-width: 240px; }
+input, textarea {
+  background: var(--bg); border: 1px solid var(--line); color: var(--text);
+  padding: 7px 10px; border-radius: 6px; font: inherit; width: 100%;
+}
+.controls input[type=number] { width: 90px; }
+
+table { width: 100%; border-collapse: collapse; }
+table th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); padding: 8px; border-bottom: 1px solid var(--line); }
+table td { padding: 10px 8px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+table.kv th { width: 140px; }
+
+.fit-ok { color: var(--ok); }
+.fit-pool { color: var(--warn); }
+.fit-no { color: var(--danger); }
+
+.progress { height: 4px; background: var(--bg); border-radius: 2px; overflow: hidden; margin-top: 5px; }
+.progress div { height: 100%; background: var(--accent); }
+
+.log, .snippet {
+  background: #0a0d12; border: 1px solid var(--line); border-radius: 8px;
+  padding: 12px; overflow: auto; font-family: ui-monospace, monospace; font-size: 12px;
+  white-space: pre-wrap; word-break: break-word; color: var(--muted);
+}
+.log { max-height: 260px; }
+
+.messages { min-height: 260px; max-height: 52vh; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding: 4px; }
+.msg { padding: 10px 14px; border-radius: 10px; max-width: 82%; white-space: pre-wrap; }
+.msg.user { align-self: flex-end; background: var(--accent-dim); color: #fff; }
+.msg.assistant { align-self: flex-start; background: var(--panel); border: 1px solid var(--line); }
+.msg.error { align-self: flex-start; border: 1px solid var(--danger); color: var(--danger); }
+.metrics { font-size: 11px; color: var(--muted); min-height: 18px; margin: 6px 2px; font-family: ui-monospace, monospace; }
+
+.composer { display: flex; gap: 8px; align-items: flex-end; margin-top: 10px; }
+.composer textarea { resize: vertical; }
+.composer button { height: 38px; }
+
+.hint { color: var(--muted); font-size: 13px; }
+.endpoints { color: var(--muted); font-size: 13px; padding-left: 20px; }
+code { font-family: ui-monospace, monospace; color: var(--accent); }

@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>QCluster</title>
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<header>
+  <h1>QCluster</h1>
+  <div class="engine-pill" id="engine-pill">
+    <span class="dot" id="engine-dot"></span>
+    <span id="engine-label">connecting…</span>
+  </div>
+  <nav>
+    <button class="tab active" data-panel="cluster">Cluster</button>
+    <button class="tab" data-panel="models">Models</button>
+    <button class="tab" data-panel="chat">Chat</button>
+    <button class="tab" data-panel="api">API</button>
+  </nav>
+</header>
+
+<main>
+  <section id="panel-cluster" class="panel active">
+    <div class="summary" id="cluster-summary"></div>
+    <div class="cards" id="node-cards"></div>
+    <div class="row">
+      <button id="rescan">Rescan for boards</button>
+    </div>
+    <h3>Engine log</h3>
+    <pre id="engine-log" class="log">no engine running</pre>
+  </section>
+
+  <section id="panel-models" class="panel">
+    <p class="hint">
+      Pooled inference spreads model layers across every ready board over ADB. It buys
+      model <em>size</em>, not speed &mdash; expect fewer tokens/second than a small model
+      on one board.
+    </p>
+    <div class="controls">
+      <label>Context <input type="number" id="ctx-size" min="512" max="8192" step="512" value="2048"></label>
+      <label>Threads <input type="number" id="threads" min="1" max="4" value="4"></label>
+      <button id="engine-stop" class="danger">Unload model</button>
+    </div>
+    <table class="models">
+      <thead>
+        <tr><th>Model</th><th>Params</th><th>Quant</th><th>Size</th><th>Fit</th><th></th></tr>
+      </thead>
+      <tbody id="model-rows"></tbody>
+    </table>
+  </section>
+
+  <section id="panel-chat" class="panel">
+    <div class="controls">
+      <label class="grow">System prompt
+        <input type="text" id="system-prompt" value="You are a concise, helpful assistant.">
+      </label>
+      <label>Temp <input type="number" id="temperature" step="0.1" min="0" max="2" value="0.7"></label>
+      <label>Max tokens <input type="number" id="max-tokens" min="16" max="2048" step="16" value="256"></label>
+    </div>
+    <div id="messages" class="messages"></div>
+    <div id="metrics" class="metrics"></div>
+    <form id="chat-form" class="composer">
+      <textarea id="prompt" rows="2" placeholder="Ask the cluster something… (Enter to send, Shift+Enter for newline)"></textarea>
+      <button type="submit" id="send">Send</button>
+      <button type="button" id="stop" class="danger" hidden>Stop</button>
+    </form>
+  </section>
+
+  <section id="panel-api" class="panel">
+    <h3>OpenAI-compatible endpoint</h3>
+    <p class="hint">Any OpenAI client works &mdash; point it at the base URL below.</p>
+    <table class="kv">
+      <tr><th>Base URL</th><td><code id="api-base"></code></td></tr>
+      <tr><th>Model name</th><td><code id="api-model">no model loaded</code></td></tr>
+      <tr><th>Auth</th><td><code id="api-auth"></code></td></tr>
+    </table>
+    <h3>curl</h3>
+    <pre class="snippet" id="snippet-curl"></pre>
+    <h3>Python (openai)</h3>
+    <pre class="snippet" id="snippet-python"></pre>
+    <h3>Python (requests, streaming)</h3>
+    <pre class="snippet" id="snippet-requests"></pre>
+    <h3>Endpoints</h3>
+    <ul class="endpoints">
+      <li><code>GET  /v1/models</code></li>
+      <li><code>POST /v1/chat/completions</code> &mdash; streaming and non-streaming</li>
+      <li><code>POST /v1/completions</code></li>
+      <li><code>GET  /api/cluster</code> &mdash; board telemetry and engine state</li>
+      <li><code>GET  /api/events</code> &mdash; SSE feed powering this page</li>
+    </ul>
+  </section>
+</main>
+
+<script src="/app.js"></script>
+</body>
+</html>
