@@ -237,7 +237,14 @@ class NodeRegistry:
                 node.last_seen = time.time()
                 if not device.usable:
                     node.state = STATE_ERROR
-                    node.error = f"adb state: {device.state}"
+                    if device.state == adb.NO_PERMISSIONS:
+                        node.error = (
+                            "USB permission denied - run "
+                            "'sudo ./scripts/setup-usb-permissions.sh' once, then "
+                            "reconnect"
+                        )
+                    else:
+                        node.error = f"adb state: {device.state}"
                     continue
                 if node.state in (STATE_ERROR, STATE_LOST) and is_new:
                     node.state = STATE_DISCOVERED

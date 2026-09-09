@@ -62,7 +62,9 @@ class Daemon:
             stop.set()
             self.engine.stop()
             self.registry.stop()
-            self.gateway.shutdown()
+            # shutdown() blocks until serve_forever() returns, so it must not run
+            # on the thread that is inside serve_forever().
+            threading.Thread(target=self.gateway.shutdown, daemon=True).start()
 
         signal.signal(signal.SIGTERM, _shutdown)
         signal.signal(signal.SIGINT, _shutdown)

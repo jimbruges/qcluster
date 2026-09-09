@@ -17,6 +17,7 @@ log = logging.getLogger("qclusterd.adb")
 
 SERIAL_RE = re.compile(r"^[A-Za-z0-9._:-]{4,64}$")
 DEFAULT_TIMEOUT = 20
+NO_PERMISSIONS = "no-usb-permission"
 
 
 class AdbError(RuntimeError):
@@ -71,13 +72,18 @@ def devices() -> list[Device]:
         if not line:
             continue
         parts = line.split()
-        serial, state = parts[0], parts[1]
+        serial = parts[0]
         if not SERIAL_RE.match(serial):
             log.warning("ignoring device with unexpected serial: %r", serial)
             continue
-        extras = dict(
-            token.split(":", 1) for token in parts[2:] if ":" in token
-        )
+        # The state can be several words ("no permissions (user ...)"), and the
+        # key:value attributes always come last.
+        attrs = [t for t in parts[1:] if ":" in t and not t.startswith("[")]
+        words = [t for t in parts[1:] if t not in attrs]
+        state = " ".join(words) or "unknown"
+        if state.startswith("no permissions"):
+            state = NO_PERMISSIONS
+        extras = dict(t.split(":", 1) for t in attrs)
         found.append(
             Device(
                 serial=serial,
