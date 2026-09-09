@@ -105,13 +105,15 @@ Child boards get the same app pushed and started automatically during provisioni
 ### 5. Run the daemon
 
 ```bash
-mkdir -p ~/.config/systemd/user
-cp scripts/qclusterd.service ~/.config/systemd/user/
-systemctl --user daemon-reload
-systemctl --user enable --now qclusterd
+./scripts/install-startup.sh
 ```
 
-Or in the foreground: `PYTHONPATH=daemon python3 -m qclusterd`
+The installer enables the `qclusterd` systemd user service and checks lingering, so
+the host daemon starts at boot before anyone logs in. If lingering is not already
+enabled on a fresh board, run `sudo loginctl enable-linger arduino` once and rerun
+the installer.
+
+Or run the daemon in the foreground for debugging: `PYTHONPATH=daemon python3 -m qclusterd`
 
 Open `http://<host-board-ip>:7000`.
 
@@ -190,21 +192,25 @@ decommissioned board is back to how it started.
 
 Three boards: one UNO Q 4 GB host plus two UNO Q 2 GB children on a powered USB hub.
 
-| | SmolLM2-360M Q4 | Qwen2.5-1.5B Q4 | Qwen2.5-3B Q4 |
-|---|---|---|---|
-| Model file | 259 MB | 986 MB | 1930 MB |
-| Fits the host board alone? | yes | **no** | **no** |
-| RSS on host `llama-server` | — | 211 MB | 80 MB |
-| RSS on child slot 1 `rpc-server` | 189 MB | 485 MB | 912 MB |
-| RSS on child slot 2 `rpc-server` | 215 MB | 547 MB | 1067 MB |
-| Generation | 8.1 tok/s | 2.8 tok/s | 1.6 tok/s |
-| Prompt processing | 16.6 tok/s | 5.2 tok/s | — |
+| | SmolLM2-360M Q4 | Qwen2.5-1.5B Q4 | Qwen2.5-3B Q4 | Mistral 7B Q4 |
+|---|---|---|---|---|
+| Model file | 259 MB | 986 MB | 1930 MB | 4370 MB |
+| Fits the host board alone? | yes | **no** | **no** | **no** |
+| Boards used | 3 | 3 | 3 | 5 |
+| RSS on host `llama-server` | — | 211 MB | 80 MB | 42 MB |
+| Largest child `rpc-server` RSS | 215 MB | 547 MB | 1067 MB | 2179 MB |
+| Generation | 8.1 tok/s | 2.8 tok/s | 1.6 tok/s | 0.31 tok/s |
+| Prompt processing | 16.6 tok/s | 5.2 tok/s | — | 0.81 tok/s |
 
 The 3B column is the point of the project: a model that needs more RAM than any
 single board has free runs because nearly all of it lives on the two children, while
 the host holds only 80 MB. Swap was barely touched (27 MB and 82 MB), so the
 placement is tight but not reckless. The cost is throughput, exactly as expected from
 pipeline-parallel RPC.
+
+With four child boards attached (one 4 GB and three 2 GB), Mistral 7B Q4 loads and
+answers through the OpenAI-compatible API. It is usable as a proof of pooled memory,
+but not interactive: a 70-token response took just over four minutes.
 
 ### How the fit estimate works
 

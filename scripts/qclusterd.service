@@ -1,6 +1,6 @@
 [Unit]
 Description=QCluster host daemon (distributed LLM across Arduino UNO Q boards)
-After=network.target docker.service
+After=default.target
 
 [Service]
 Type=simple
@@ -12,6 +12,7 @@ Environment=PYTHONPATH=/home/arduino/qcluster/daemon
 ExecStart=/usr/bin/python3 -m qclusterd
 Restart=on-failure
 RestartSec=5
+StartLimitIntervalSec=0
 
 [Install]
 WantedBy=default.target
