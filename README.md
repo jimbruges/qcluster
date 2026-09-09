@@ -67,13 +67,22 @@ qcluster/
 
 ```bash
 sudo ./scripts/setup-usb-permissions.sh
-newgrp plugdev        # or log out and back in
 ```
 
-This is the only thing in QCluster that needs root. It adds you to `plugdev` and
-installs a udev rule for Arduino's USB vendor id so `adb` can claim the child boards.
+This is the only thing in QCluster that needs root. It installs a udev rule for
+Arduino's USB vendor id so `adb` can claim the child boards. Everything else runs
+unprivileged.
 
-### 2. Build the llama.cpp runtime
+### 2. Install adb (no root)
+
+```bash
+./scripts/fetch-adb.sh
+```
+
+Downloads the Debian `adb` packages and unpacks them under `tools/`, then generates a
+wrapper that points the dynamic linker at them.
+
+### 3. Build the llama.cpp runtime
 
 ```bash
 git clone --depth 1 https://github.com/ggml-org/llama.cpp build/llama.cpp
@@ -84,7 +93,7 @@ Builds inside a container with `-DGGML_RPC=ON` and stages `llama-server`, `llama
 `rpc-server` and the shared libraries into `runtime/`, alongside a `manifest.json` of
 sha256 hashes that the provisioner uses to avoid re-pushing unchanged files.
 
-### 3. Deploy the LED display app
+### 4. Deploy the LED display app
 
 ```bash
 ./scripts/deploy.sh --install
@@ -93,7 +102,7 @@ arduino-app-cli app start ~/ArduinoApps/q-cluster-display
 
 Child boards get the same app pushed and started automatically during provisioning.
 
-### 4. Run the daemon
+### 5. Run the daemon
 
 ```bash
 mkdir -p ~/.config/systemd/user
