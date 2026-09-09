@@ -18,6 +18,7 @@
     <button class="tab" data-panel="models">Models</button>
     <button class="tab" data-panel="chat">Chat</button>
     <button class="tab" data-panel="api">API</button>
+    <button class="tab" data-panel="settings">Settings</button>
   </nav>
 </header>
 
@@ -49,6 +50,20 @@
       </thead>
       <tbody id="model-rows"></tbody>
     </table>
+
+    <h3>Add a model from Hugging Face</h3>
+    <p class="hint">
+      Paste a direct link to a <code>.gguf</code> file. Both <code>/blob/</code> and
+      <code>/resolve/</code> links work; the file size is read from Hugging Face.
+    </p>
+    <form id="custom-model-form" class="controls">
+      <label class="grow">File URL
+        <input type="url" id="custom-url" placeholder="https://huggingface.co/owner/repo/resolve/main/model.gguf" required>
+      </label>
+      <label>Display name (optional) <input type="text" id="custom-name" placeholder="auto"></label>
+      <button type="submit">Add model</button>
+    </form>
+    <div id="custom-status" class="metrics"></div>
   </section>
 
   <section id="panel-chat" class="panel">
@@ -65,7 +80,9 @@
       <textarea id="prompt" rows="2" placeholder="Ask the cluster something… (Enter to send, Shift+Enter for newline)"></textarea>
       <button type="submit" id="send">Send</button>
       <button type="button" id="stop" class="danger" hidden>Stop</button>
+      <button type="button" id="clear-chat" class="danger">Clear</button>
     </form>
+    <p class="hint" id="context-note"></p>
   </section>
 
   <section id="panel-api" class="panel">
@@ -90,6 +107,54 @@
       <li><code>GET  /api/cluster</code> &mdash; board telemetry and engine state</li>
       <li><code>GET  /api/events</code> &mdash; SSE feed powering this page</li>
     </ul>
+  </section>
+
+  <section id="panel-settings" class="panel">
+    <h3>Host WiFi</h3>
+    <p class="hint">
+      Only the host board needs a network &mdash; it serves this page and downloads
+      models. Child boards are reached over USB/ADB and are deliberately kept off the
+      network.
+    </p>
+    <table class="kv">
+      <tr><th>Interface</th><td><code id="wifi-device">—</code></td></tr>
+      <tr><th>Network</th><td><code id="wifi-ssid">—</code></td></tr>
+      <tr><th>IP address</th><td><code id="wifi-ip">—</code></td></tr>
+      <tr><th>Signal</th><td><code id="wifi-signal">—</code></td></tr>
+    </table>
+    <form id="wifi-form" class="controls">
+      <label class="grow">Network
+        <input list="wifi-networks" id="wifi-input-ssid" placeholder="SSID" required>
+        <datalist id="wifi-networks"></datalist>
+      </label>
+      <label>Password <input type="password" id="wifi-password" placeholder="leave blank if open"></label>
+      <button type="button" id="wifi-scan">Scan</button>
+      <button type="submit">Connect</button>
+    </form>
+    <div id="wifi-status" class="metrics"></div>
+
+    <h3>Board shell password</h3>
+    <p class="hint">
+      QCluster runs unprivileged, so this is only needed for administrative jobs that
+      genuinely require root &mdash; such as installing the USB rule that lets the host
+      talk to child boards. Passwords are verified against the board, stored with
+      <code>0600</code> permissions, passed to <code>sudo</code> on stdin, and never
+      logged.
+    </p>
+    <div id="sudo-boards" class="cards"></div>
+    <div class="row">
+      <button id="sudo-refresh">Check all boards</button>
+      <button id="usb-rules">Install USB rules on host</button>
+    </div>
+    <div id="sudo-status" class="metrics"></div>
+
+    <h3>Boards</h3>
+    <p class="hint">
+      Decommissioning removes <code>~/qcluster</code> and the QCluster Display app from a
+      child board and stops managing it, returning the board to how it was before. It
+      stays decommissioned across daemon restarts until you re-enable it.
+    </p>
+    <div id="board-admin" class="cards"></div>
   </section>
 </main>
 

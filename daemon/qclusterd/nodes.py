@@ -6,7 +6,6 @@ placement planner can treat the whole cluster uniformly.
 
 from __future__ import annotations
 
-import json
 import logging
 import threading
 import time
@@ -15,6 +14,7 @@ from dataclasses import dataclass, field
 from qcluster_common.sysstat import Sampler
 
 from . import adb, config
+from .state import STATE
 
 log = logging.getLogger("qclusterd.nodes")
 
@@ -37,6 +37,7 @@ STATE_PROVISIONING = "provisioning"
 STATE_READY = "ready"
 STATE_ERROR = "error"
 STATE_LOST = "lost"
+STATE_DECOMMISSIONED = "decommissioned"
 
 
 @dataclass
@@ -168,19 +169,10 @@ class NodeRegistry:
 
     # -- persistence ----------------------------------------------------
     def _load_slots(self) -> dict[str, int]:
-        try:
-            with open(config.STATE_PATH) as fh:
-                return {k: int(v) for k, v in json.load(fh).get("slots", {}).items()}
-        except (OSError, ValueError, json.JSONDecodeError):
-            return {}
+        return {k: int(v) for k, v in (STATE.get("slots") or {}).items()}
 
     def _save_slots(self) -> None:
-        try:
-            config.STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-            with open(config.STATE_PATH, "w") as fh:
-                json.dump({"slots": self._slots}, fh, indent=2)
-        except OSError as exc:
-            log.warning("could not persist slot map: %s", exc)
+        STATE.set("slots", self._slots)
 
     def _slot_for(self, serial: str) -> int:
         if serial in self._slots:
@@ -216,6 +208,9 @@ class NodeRegistry:
         """Boards adb can still see but that failed to provision."""
         return [n for n in self.children() if n.state == STATE_ERROR]
 
+    def decommissioned(self) -> list[Node]:
+        return [n for n in self.children() if n.state == STATE_DECOMMISSIONED]
+
     def snapshot(self) -> dict:
         nodes = [n.as_dict() for n in self.all()]
         ready = [n for n in self.all() if n.state == STATE_READY]
@@ -237,16 +232,19 @@ class NodeRegistry:
         seen: set[str] = set()
         for device in devices:
             seen.add(device.serial)
+            is_new = False
             with self._lock:
                 node = self._nodes.get(device.serial)
                 if node is None:
                     node = Node(serial=device.serial, slot=self._slot_for(device.serial))
                     node.rpc_host_port = config.RPC_PORT_BASE + node.slot
+                    if STATE.is_decommissioned(device.serial):
+                        node.state = STATE_DECOMMISSIONED
                     self._nodes[device.serial] = node
                     log.info("discovered board %s (slot %d)", device.serial, node.slot)
-                    is_new = True
-                else:
-                    is_new = node.state == STATE_LOST
+                    is_new = node.state != STATE_DECOMMISSIONED
+                elif node.state == STATE_LOST:
+                    is_new = not STATE.is_decommissioned(device.serial)
                 node.last_seen = time.time()
                 if not device.usable:
                     node.state = STATE_ERROR
@@ -325,7 +323,7 @@ class NodeRegistry:
     def _telemetry_once(self) -> None:
         self._sample_host()
         for node in self.children():
-            if node.state in (STATE_LOST,):
+            if node.state in (STATE_LOST, STATE_DECOMMISSIONED):
                 continue
             self._sample_child(node)
 

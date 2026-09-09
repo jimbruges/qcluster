@@ -13,7 +13,13 @@ import threading
 import time
 
 from . import adb, config
-from .nodes import STATE_ERROR, STATE_PROVISIONING, STATE_READY, Node
+from .nodes import (
+    STATE_DECOMMISSIONED,
+    STATE_ERROR,
+    STATE_PROVISIONING,
+    STATE_READY,
+    Node,
+)
 
 log = logging.getLogger("qclusterd.provision")
 
@@ -53,6 +59,23 @@ if [ -f {RPC_PIDFILE} ] && kill -0 "$(cat {RPC_PIDFILE})" 2>/dev/null; then
 else
   echo "stopped"
 fi
+"""
+
+# Everything QCluster ever writes to a child lives under these two paths.
+DECOMMISSION = f"""
+if [ -f {RPC_PIDFILE} ]; then kill "$(cat {RPC_PIDFILE})" 2>/dev/null; fi
+pkill -x rpc-server 2>/dev/null
+arduino-app-cli app stop {config.NODE_APP_DIR} >/dev/null 2>&1
+rm -rf {config.NODE_ROOT}
+rm -rf {config.NODE_APP_DIR}
+echo "removed {config.NODE_ROOT} and {config.NODE_APP_DIR}"
+"""
+
+DECOMMISSION_KEEP_APP = f"""
+if [ -f {RPC_PIDFILE} ]; then kill "$(cat {RPC_PIDFILE})" 2>/dev/null; fi
+pkill -x rpc-server 2>/dev/null
+rm -rf {config.NODE_ROOT}
+echo "removed {config.NODE_ROOT}"
 """
 
 
@@ -99,6 +122,22 @@ class Provisioner:
     def teardown(self, node: Node) -> None:
         adb.forward_remove(node.serial, node.rpc_host_port)
         node.rpc_running = False
+
+    def decommission(self, node: Node, remove_app: bool = True) -> str:
+        """Remove everything QCluster put on a board and stop managing it."""
+        with self._lock_for(node.serial), self._cluster:
+            script = DECOMMISSION if remove_app else DECOMMISSION_KEEP_APP
+            try:
+                output = adb.shell_script(node.serial, script, timeout=120).strip()
+            except adb.AdbError as exc:
+                raise RuntimeError(f"could not clean board {node.serial}: {exc}") from exc
+            adb.forward_remove(node.serial, node.rpc_host_port)
+            node.rpc_running = False
+            node.state = STATE_DECOMMISSIONED
+            node.error = None
+            node.provisioned_manifest = None
+            log.info("decommissioned board %s (slot %d)", node.serial, node.slot)
+            return output
 
     def stop_rpc(self, node: Node) -> None:
         try:

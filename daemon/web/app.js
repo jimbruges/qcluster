@@ -3,6 +3,24 @@
 const $ = (id) => document.getElementById(id);
 const state = { engine: null, models: [], nodes: [], controller: null, history: [] };
 
+const TOKEN_KEY = 'qcluster.token';
+const getToken = () => localStorage.getItem(TOKEN_KEY) || '';
+const setToken = (value) => value
+  ? localStorage.setItem(TOKEN_KEY, value)
+  : localStorage.removeItem(TOKEN_KEY);
+
+function authHeaders(base = {}) {
+  const token = getToken();
+  return token ? { ...base, Authorization: `Bearer ${token}` } : { ...base };
+}
+
+function promptForToken(message = 'This QCluster is password protected.') {
+  const value = prompt(`${message}\nEnter the access password:`);
+  if (value === null) return false;
+  setToken(value.trim());
+  return true;
+}
+
 /* ---------- tabs ---------- */
 document.querySelectorAll('.tab').forEach((tab) => {
   tab.addEventListener('click', () => {
@@ -10,6 +28,7 @@ document.querySelectorAll('.tab').forEach((tab) => {
     document.querySelectorAll('.panel').forEach((p) => p.classList.remove('active'));
     tab.classList.add('active');
     $(`panel-${tab.dataset.panel}`).classList.add('active');
+    if (tab.dataset.panel === 'settings') refreshSudo();
   });
 });
 
@@ -18,9 +37,13 @@ const mb = (v) => (v >= 1024 ? `${(v / 1024).toFixed(1)} GB` : `${Math.round(v)}
 
 async function api(path, options = {}) {
   const res = await fetch(path, {
-    headers: { 'Content-Type': 'application/json' },
     ...options,
+    headers: authHeaders({ 'Content-Type': 'application/json', ...(options.headers || {}) }),
   });
+  if (res.status === 401) {
+    if (promptForToken()) return api(path, options);
+    throw new Error('access password required');
+  }
   const text = await res.text();
   const body = text ? JSON.parse(text) : {};
   if (!res.ok) throw new Error(body.error?.message || body.error || res.statusText);
@@ -29,12 +52,22 @@ async function api(path, options = {}) {
 
 /* ---------- live feed ---------- */
 function connect() {
-  const source = new EventSource('/api/events');
-  source.onmessage = (event) => render(JSON.parse(event.data));
-  source.onerror = () => {
-    $('engine-label').textContent = 'disconnected';
-    $('engine-dot').className = 'dot error';
+  const token = getToken();
+  const url = token ? `/api/events?token=${encodeURIComponent(token)}` : '/api/events';
+  const source = new EventSource(url);
+  let gotData = false;
+  source.onmessage = (event) => { gotData = true; render(JSON.parse(event.data)); };
+  source.onerror = async () => {
     source.close();
+    $('engine-dot').className = 'dot error';
+    if (!gotData) {
+      // Most likely a 401: ask for the password, then reconnect.
+      try {
+        const { token_set: needsToken } = await (await fetch('/api/auth')).json();
+        if (needsToken && promptForToken()) return connect();
+      } catch { /* daemon down */ }
+    }
+    $('engine-label').textContent = 'disconnected';
     setTimeout(connect, 3000);
   };
 }
@@ -47,6 +80,7 @@ function render(data) {
   renderNodes(data);
   renderModels();
   renderApi(data);
+  renderSettings(data);
 }
 
 function renderEngine(data) {
@@ -133,11 +167,11 @@ function renderModels() {
       action = `<button class="small danger" data-unload="1">Unload</button>`;
     } else {
       action = `<button class="small" data-load="${model.id}">Load</button>
-                <button class="small danger" data-delete="${model.id}">Delete</button>`;
+                <button class="small danger" data-delete="${model.id}">${model.custom ? 'Remove' : 'Delete'}</button>`;
     }
     return `
       <tr>
-        <td><strong>${model.name}</strong><br><span class="card-sub">${model.notes}</span></td>
+        <td><strong>${model.name}</strong>${model.custom ? ' <span class="pill">custom</span>' : ''}<br><span class="card-sub">${model.notes}</span></td>
         <td>${model.params}</td>
         <td>${model.quant}</td>
         <td>${mb(model.file_size_mb)}</td>
@@ -207,6 +241,31 @@ with requests.post(
     : '';
 }
 
+function renderSettings(data) {
+  const w = data.wifi || {};
+  $('wifi-device').textContent = w.device || (w.available ? '—' : 'no WiFi interface');
+  $('wifi-ssid').textContent = w.ssid || 'not connected';
+  $('wifi-ip').textContent = w.ip || '—';
+  $('wifi-signal').textContent = w.signal != null ? `${w.signal}%` : '—';
+
+  $('board-admin').innerHTML = state.nodes.filter((n) => n.role !== 'host').map((node) => `
+    <div class="card">
+      <div class="card-head">
+        <div>
+          <div class="card-title">Board ${node.slot}</div>
+          <div class="card-sub">${node.serial}</div>
+        </div>
+        <span class="pill ${node.state}">${node.state}</span>
+      </div>
+      <div class="card-foot"><span>${node.caps?.board || ''}</span></div>
+      <div class="card-actions">
+        ${node.state === 'decommissioned'
+          ? `<button class="small" data-recommission="${node.serial}">Re-enable</button>`
+          : `<button class="small danger" data-decommission="${node.serial}">Decommission</button>`}
+      </div>
+    </div>`).join('') || '<p class="hint">No child boards connected.</p>';
+}
+
 /* ---------- actions ---------- */
 document.addEventListener('click', async (event) => {
   const target = event.target.closest('button');
@@ -218,11 +277,163 @@ document.addEventListener('click', async (event) => {
     else if (d.delete) await api(`/api/models/${d.delete}`, { method: 'DELETE' });
     else if (d.reprovision) await api(`/api/nodes/${d.reprovision}/reprovision`, { method: 'POST' });
     else if (d.rpc) await api(`/api/nodes/${d.rpc}/rpc/restart`, { method: 'POST' });
+    else if (d.decommission) await decommission(d.decommission);
+    else if (d.recommission) await api(`/api/nodes/${d.recommission}/recommission`, { method: 'POST' });
+    else if (d.sudoSave) await sudoAction('save', d.sudoSave);
+    else if (d.sudoForget) await sudoAction('forget', d.sudoForget);
+    else if (d.sudoSet) await sudoAction('set', d.sudoSet);
     else if (d.unload || target.id === 'engine-stop') await api('/api/engine/stop', { method: 'POST' });
     else if (d.load) await loadModel(d.load);
     else if (target.id === 'rescan') await api('/api/nodes/rescan', { method: 'POST' });
   } catch (err) {
     alert(err.message);
+  }
+});
+
+async function decommission(serial) {
+  const removeApp = confirm(
+    `Decommission board ${serial}?\n\n` +
+    'This deletes ~/qcluster from the board and stops managing it.\n\n' +
+    'OK = also remove the QCluster Display app (full clean-up)\n' +
+    'Cancel = keep the display app installed'
+  );
+  const result = await api(`/api/nodes/${serial}/decommission`, {
+    method: 'POST',
+    body: JSON.stringify({ remove_app: removeApp }),
+  });
+  alert(result.message || 'Board cleaned.');
+}
+
+/* ---------- wifi ---------- */
+$('wifi-scan').addEventListener('click', async () => {
+  $('wifi-status').textContent = 'scanning…';
+  try {
+    const { networks } = await api('/api/wifi/scan');
+    $('wifi-networks').innerHTML = networks
+      .map((n) => `<option value="${n.ssid}">${n.signal}% ${n.security || 'open'}</option>`)
+      .join('');
+    $('wifi-status').textContent = `${networks.length} networks found`;
+  } catch (err) {
+    $('wifi-status').textContent = err.message;
+  }
+});
+
+$('wifi-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const ssid = $('wifi-input-ssid').value.trim();
+  $('wifi-status').textContent = `connecting to ${ssid}…`;
+  try {
+    const result = await api('/api/wifi/connect', {
+      method: 'POST',
+      body: JSON.stringify({ ssid, password: $('wifi-password').value }),
+    });
+    $('wifi-password').value = '';
+    $('wifi-status').textContent = result.message || 'connected';
+  } catch (err) {
+    $('wifi-status').textContent = err.message;
+  }
+});
+
+/* ---------- board shell (sudo) credentials ---------- */
+const SUDO_LABELS = {
+  'passwordless': ['ready', 'sudo works without a password'],
+  'stored': ['ready', 'saved password verified'],
+  'password-required': ['error', 'needs a password'],
+  'stored-invalid': ['error', 'saved password rejected'],
+  'unknown': ['lost', 'unreachable'],
+};
+
+async function refreshSudo() {
+  $('sudo-status').textContent = 'checking boards…';
+  try {
+    const { boards } = await api('/api/sudo');
+    $('sudo-boards').innerHTML = boards.map((b) => {
+      const [pill, text] = SUDO_LABELS[b.state] || ['', b.state];
+      const name = b.serial === 'host' ? 'Host board' : `Board ${b.serial}`;
+      const canSet = b.state === 'passwordless' || b.state === 'stored';
+      return `
+        <div class="card">
+          <div class="card-head">
+            <div><div class="card-title">${name}</div>
+                 <div class="card-sub">${b.serial}</div></div>
+            <span class="pill ${pill}">${text}</span>
+          </div>
+          <div class="card-actions" style="flex-direction:column;align-items:stretch;gap:8px">
+            <input type="password" placeholder="current sudo password"
+                   data-sudo-input="${b.serial}" autocomplete="off">
+            <div style="display:flex;gap:6px;flex-wrap:wrap">
+              <button class="small" data-sudo-save="${b.serial}">Save &amp; verify</button>
+              ${b.stored ? `<button class="small danger" data-sudo-forget="${b.serial}">Forget</button>` : ''}
+            </div>
+            ${canSet ? `
+            <input type="password" placeholder="new password (min 8 chars)"
+                   data-sudo-new="${b.serial}" autocomplete="new-password">
+            <button class="small" data-sudo-set="${b.serial}">Set board password</button>` : ''}
+          </div>
+        </div>`;
+    }).join('');
+    $('sudo-status').textContent = '';
+  } catch (err) {
+    $('sudo-status').textContent = err.message;
+  }
+}
+
+$('sudo-refresh').addEventListener('click', refreshSudo);
+
+$('usb-rules').addEventListener('click', async () => {
+  $('sudo-status').textContent = 'installing udev rules on the host…';
+  try {
+    const result = await api('/api/sudo/install-usb-rules', { method: 'POST' });
+    $('sudo-status').textContent = result.message || 'done';
+  } catch (err) {
+    $('sudo-status').textContent = err.message;
+  }
+});
+
+async function sudoAction(kind, serial) {
+  const field = kind === 'set'
+    ? document.querySelector(`[data-sudo-new="${serial}"]`)
+    : document.querySelector(`[data-sudo-input="${serial}"]`);
+  const password = field ? field.value : '';
+  $('sudo-status').textContent = 'working…';
+  try {
+    let result;
+    if (kind === 'save') {
+      result = await api('/api/sudo/save', {
+        method: 'POST', body: JSON.stringify({ serial, password }),
+      });
+    } else if (kind === 'forget') {
+      result = await api('/api/sudo/forget', {
+        method: 'POST', body: JSON.stringify({ serial }),
+      });
+    } else {
+      result = await api('/api/sudo/set-password', {
+        method: 'POST', body: JSON.stringify({ serial, password }),
+      });
+    }
+    if (field) field.value = '';
+    $('sudo-status').textContent = result.message || 'done';
+    await refreshSudo();
+  } catch (err) {
+    $('sudo-status').textContent = err.message;
+  }
+}
+
+/* ---------- custom models ---------- */
+$('custom-model-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  $('custom-status').textContent = 'checking link…';
+  try {
+    const model = await api('/api/models/custom', {
+      method: 'POST',
+      body: JSON.stringify({ url: $('custom-url').value, name: $('custom-name').value }),
+    });
+    $('custom-url').value = '';
+    $('custom-name').value = '';
+    $('custom-status').textContent =
+      `Added ${model.name} (${model.file_size_mb} MB). Download it from the table above.`;
+  } catch (err) {
+    $('custom-status').textContent = err.message;
   }
 });
 
@@ -277,6 +488,21 @@ $('prompt').addEventListener('keydown', (event) => {
 
 $('stop').addEventListener('click', () => state.controller?.abort());
 
+$('clear-chat').addEventListener('click', () => {
+  state.controller?.abort();
+  state.history = [];
+  $('messages').innerHTML = '';
+  $('metrics').textContent = '';
+  updateContextNote();
+});
+
+function updateContextNote() {
+  const turns = state.history.length;
+  $('context-note').textContent = turns
+    ? `${turns} message${turns === 1 ? '' : 's'} in context (last 8 are sent with each request)`
+    : 'Context is empty.';
+}
+
 $('chat-form').addEventListener('submit', async (event) => {
   event.preventDefault();
   const prompt = $('prompt').value.trim();
@@ -301,7 +527,7 @@ $('chat-form').addEventListener('submit', async (event) => {
   try {
     const response = await fetch('/v1/chat/completions', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
       signal: state.controller.signal,
       body: JSON.stringify({
         model: state.engine.alias,
@@ -344,14 +570,15 @@ $('chat-form').addEventListener('submit', async (event) => {
     state.history.push({ role: 'assistant', content: answer });
     const elapsed = (performance.now() - started) / 1000;
     $('metrics').textContent =
-      `${elapsed.toFixed(1)} s total · first token ${(firstToken / 1000 || 0).toFixed(1)} s`;
-  } catch (err) {
+      `${elapsed.toFixed(1)} s total · first token ${(firstToken / 1000 || 0).toFixed(1)} s`;  } catch (err) {
     if (err.name !== 'AbortError') bubble.className = 'msg error', bubble.textContent = err.message;
   } finally {
     $('send').disabled = false;
     $('stop').hidden = true;
     state.controller = null;
+    updateContextNote();
   }
 });
 
+updateContextNote();
 connect();

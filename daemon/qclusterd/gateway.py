@@ -17,13 +17,27 @@ import time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import config
+from . import config, credentials, wifi
 from .engine import plan_placement
+from .state import STATE
 
 log = logging.getLogger("qclusterd.gateway")
 
 MAX_BODY = 4 * 1024 * 1024
 SSE_INTERVAL_S = 1.0
+
+# Mirrors scripts/setup-usb-permissions.sh so it can be applied from the UI.
+USB_RULES_SCRIPT = (
+    "getent group plugdev >/dev/null || groupadd -r plugdev; "
+    "usermod -aG plugdev arduino; "
+    "printf '%s\\n' "
+    "'SUBSYSTEM==\"usb\", ATTR{idVendor}==\"2341\", MODE=\"0660\", "
+    "OWNER=\"arduino\", GROUP=\"plugdev\", TAG+=\"uaccess\"' "
+    "> /etc/udev/rules.d/51-arduino-uno-q-adb.rules; "
+    "udevadm control --reload-rules; "
+    "udevadm trigger --subsystem-match=usb --action=add; "
+    "echo 'udev rules installed'"
+)
 
 
 class Gateway:
@@ -34,6 +48,8 @@ class Gateway:
         self.engine = engine
         self.cluster_lock = cluster_lock or threading.RLock()
         self._server: ThreadingHTTPServer | None = None
+        self._wifi: dict = {"available": False}
+        self._wifi_at = 0.0
 
     def serve_forever(self) -> None:
         handler = type("BoundHandler", (_Handler,), {"gateway": self})
@@ -51,17 +67,32 @@ class Gateway:
         snapshot = self.registry.snapshot()
         snapshot["engine"] = self.engine.status()
         snapshot["auth_required"] = bool(config.AUTH_TOKEN)
+        snapshot["wifi"] = self.wifi_status()
         return snapshot
 
+    def wifi_status(self) -> dict:
+        """Cached because nmcli is far slower than the SSE tick."""
+        now = time.monotonic()
+        if now - self._wifi_at > 15:
+            try:
+                self._wifi = wifi.status()
+            except Exception as exc:  # nmcli absent or unhappy
+                self._wifi = {"available": False, "error": str(exc)}
+            self._wifi_at = now
+        return self._wifi
 
-def _authorised(headers) -> bool:
-    if not config.AUTH_TOKEN:
+
+def _authorised(headers, query_token: str = "") -> bool:
+    expected = config.AUTH_TOKEN
+    if not expected:
         return True
     supplied = (headers.get("Authorization") or "").strip()
     if supplied.lower().startswith("bearer "):
         supplied = supplied[7:].strip()
+    # EventSource cannot set headers, so the SSE feed may pass the token as a query
+    # parameter instead.
+    supplied = supplied or query_token
     # Constant-time-ish comparison; tokens are short so this is plenty.
-    expected = config.AUTH_TOKEN
     if len(supplied) != len(expected):
         return False
     return all(a == b for a, b in zip(supplied, expected))
@@ -104,14 +135,23 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", "0")
         self.end_headers()
 
+    def _known_board(self, serial: str) -> bool:
+        return serial == "host" or self.gateway.registry.get(serial) is not None
+
     # -- routing --------------------------------------------------------
     def do_GET(self):  # noqa: N802
-        path = urllib.parse.urlparse(self.path).path
+        parsed = urllib.parse.urlparse(self.path)
+        path = parsed.path
         if path.startswith("/v1/") or path == "/v1":
             if not _authorised(self.headers):
                 return self._deny()
             return self._proxy("GET")
         if path.startswith("/api/"):
+            # /api/auth stays open so the UI can tell whether to ask for a token.
+            if path != "/api/auth":
+                token = (urllib.parse.parse_qs(parsed.query).get("token") or [""])[0]
+                if not _authorised(self.headers, token):
+                    return self._deny()
             return self._api_get(path)
         if path == "/health":
             return self._json(200, {"ok": True, "engine": self.gateway.engine.state})
@@ -135,8 +175,12 @@ class _Handler(BaseHTTPRequestHandler):
             return self._deny()
         parts = [p for p in path.split("/") if p]
         if len(parts) == 3 and parts[:2] == ["api", "models"]:
+            model = self.gateway.store.get(parts[2])
             try:
-                self.gateway.store.delete(parts[2])
+                if model and model.custom:
+                    self.gateway.store.remove_custom(parts[2])
+                else:
+                    self.gateway.store.delete(parts[2])
             except KeyError:
                 return self._json(404, {"error": "unknown model"})
             return self._json(200, {"ok": True})
@@ -184,6 +228,18 @@ class _Handler(BaseHTTPRequestHandler):
             ctx = int((query.get("ctx_size") or [model.ctx_size])[0])
             placement = plan_placement(model, gw.registry.all(), ctx)
             return self._json(200, placement.as_dict())
+        if path == "/api/wifi":
+            return self._json(200, gw.wifi_status())
+        if path == "/api/wifi/scan":
+            try:
+                return self._json(200, {"networks": wifi.scan()})
+            except RuntimeError as exc:
+                return self._json(503, {"error": str(exc)})
+        if path == "/api/auth":
+            return self._json(200, {"token_set": bool(config.AUTH_TOKEN)})
+        if path == "/api/sudo":
+            serials = ["host"] + [n.serial for n in gw.registry.children()]
+            return self._json(200, {"boards": credentials.all_status(serials)})
         if path == "/api/events":
             return self._events()
         return self._json(404, {"error": "not found"})
@@ -235,12 +291,87 @@ class _Handler(BaseHTTPRequestHandler):
             gw.registry._discover_once()
             return self._json(200, gw.registry.snapshot())
 
+        if path == "/api/wifi/connect":
+            ssid = str(body.get("ssid", "")).strip()
+            password = body.get("password") or None
+            try:
+                return self._json(200, wifi.connect(ssid, password))
+            except (ValueError, RuntimeError) as exc:
+                return self._json(400, {"error": str(exc)})
+
+        if path == "/api/sudo/save":
+            serial = str(body.get("serial", "")).strip()
+            if not self._known_board(serial):
+                return self._json(404, {"error": "unknown board"})
+            try:
+                return self._json(200, credentials.save(serial, str(body.get("password", ""))))
+            except ValueError as exc:
+                return self._json(400, {"error": str(exc)})
+
+        if path == "/api/sudo/forget":
+            serial = str(body.get("serial", "")).strip()
+            if not self._known_board(serial):
+                return self._json(404, {"error": "unknown board"})
+            return self._json(200, credentials.forget(serial))
+
+        if path == "/api/sudo/set-password":
+            serial = str(body.get("serial", "")).strip()
+            if not self._known_board(serial):
+                return self._json(404, {"error": "unknown board"})
+            try:
+                return self._json(
+                    200, credentials.set_login_password(serial, str(body.get("password", "")))
+                )
+            except ValueError as exc:
+                return self._json(400, {"error": str(exc)})
+            except (RuntimeError, PermissionError) as exc:
+                return self._json(502, {"error": str(exc)})
+
+        if path == "/api/sudo/install-usb-rules":
+            try:
+                output = credentials.run_privileged("host", USB_RULES_SCRIPT)
+            except PermissionError as exc:
+                return self._json(403, {"error": str(exc)})
+            except RuntimeError as exc:
+                return self._json(502, {"error": str(exc)})
+            return self._json(200, {"ok": True, "message": output[:400]})
+
+        if path == "/api/models/custom":
+            try:
+                model = gw.store.add_from_url(
+                    str(body.get("url", "")),
+                    str(body.get("name", "")),
+                    int(body.get("ctx_size") or 0),
+                )
+            except (ValueError, TypeError) as exc:
+                return self._json(400, {"error": str(exc)})
+            return self._json(201, {"id": model.id, "name": model.name,
+                                    "file_size_mb": model.file_size_mb})
+
         if len(parts) >= 4 and parts[:2] == ["api", "nodes"]:
             node = gw.registry.get(parts[2])
             if not node:
                 return self._json(404, {"error": "unknown node"})
             action = parts[3]
             if action == "reprovision":
+                gw.provisioner.provision_async(node)
+                return self._json(202, {"ok": True})
+            if action == "decommission":
+                if node.is_host:
+                    return self._json(400, {"error": "cannot decommission the host board"})
+                if gw.engine.running:
+                    gw.engine.stop()
+                try:
+                    message = gw.provisioner.decommission(
+                        node, remove_app=bool(body.get("remove_app", True))
+                    )
+                except RuntimeError as exc:
+                    return self._json(502, {"error": str(exc)})
+                STATE.set_decommissioned(node.serial, True)
+                return self._json(200, {"ok": True, "message": message})
+            if action == "recommission":
+                STATE.set_decommissioned(node.serial, False)
+                node.state = "discovered"
                 gw.provisioner.provision_async(node)
                 return self._json(202, {"ok": True})
             if action == "rpc" and len(parts) == 5 and parts[4] == "restart":
