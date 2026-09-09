@@ -1,0 +1,3 @@
+name: QCluster Display
+icon: 📊
+description: "Shows this board's live CPU and RAM utilisation on the LED matrix. Runs on every board in a QCluster."
