@@ -17,7 +17,7 @@ import time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import config, credentials, wifi
+from . import config, credentials, identify, wifi
 from .engine import plan_placement
 from .state import STATE
 
@@ -406,6 +406,14 @@ class _Handler(BaseHTTPRequestHandler):
                 node.state = "discovered"
                 gw.provisioner.provision_async(node)
                 return self._json(202, {"ok": True})
+            if action == "identify":
+                if node.state == "lost":
+                    return self._json(409, {"error": "board is disconnected"})
+                if not node.caps.get("identify_supported"):
+                    return self._json(409, {
+                        "error": "this board image exposes no writable MPU user LED",
+                    })
+                return self._json(202, identify.start(node.serial, node.slot))
             if action == "rpc" and len(parts) == 5 and parts[4] == "restart":
                 gw.provisioner.restart_rpc(node)
                 return self._json(200, {"ok": True})

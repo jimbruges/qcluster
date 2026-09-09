@@ -103,6 +103,9 @@ button:disabled { background: var(--line); color: var(--muted); cursor: not-allo
 button.danger { background: transparent; border: 1px solid var(--danger); color: var(--danger); }
 button.danger:hover { background: var(--danger); color: #fff; }
 button.small { padding: 4px 10px; font-size: 12px; }
+button.identify { background: transparent; border: 1px solid var(--accent); color: var(--accent); }
+button.identify:hover { background: var(--accent-dim); color: #fff; }
+button.identify-active { animation: pulse 0.7s infinite; }
 
 .row { margin-top: 16px; }
 .controls { display: flex; gap: 14px; align-items: flex-end; margin-bottom: 16px; flex-wrap: wrap; }

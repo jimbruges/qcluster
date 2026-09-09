@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 
 from qcluster_common.sysstat import Sampler
 
-from . import adb, config
+from . import adb, config, identify
 from .state import STATE
 
 log = logging.getLogger("qclusterd.nodes")
@@ -31,6 +31,9 @@ PROBE_SCRIPT = (
     # -x matches the process name exactly, so pgrep cannot match its own -f pattern.
     "echo \"rpc $(pgrep -c -x rpc-server || echo 0)\"; "
     "echo \"rpcrss $(ps -eo rss=,comm= | awk '$2==\"rpc-server\"{s+=$1} END{print s+0}')\"; "
+    "identify=0; for led in /sys/class/leds/*user*/brightness; do "
+    "  [ -w \"$led\" ] && identify=1; "
+    "done; echo \"identify $identify\"; "
     "echo \"board $(tr -d '\\0' < /sys/firmware/devicetree/base/compatible | head -c 32)\""
 )
 
@@ -156,6 +159,7 @@ def parse_probe(text: str, cpu_percent: float) -> tuple[dict, dict]:
         "board": values.get("board", "").strip() or "unknown",
         "rpc_count": int(num("rpc")),
         "rpc_rss_mb": int(num("rpcrss") // 1024),
+        "identify_supported": bool(num("identify")),
     }
     return stats, caps
 
@@ -300,6 +304,7 @@ class NodeRegistry:
                 "cores": stats.cores,
                 "disk_free_mb": _host_disk_free_mb(),
                 "board": "arduino,imola (host)",
+                "identify_supported": identify.host_supported(),
             }
             host.reclaimable_mb = _process_rss_mb("llama-server")
             host.last_seen = time.time()

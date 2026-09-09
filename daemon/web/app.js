@@ -1,7 +1,15 @@
 'use strict';
 
 const $ = (id) => document.getElementById(id);
-const state = { engine: null, models: [], nodes: [], controller: null, history: [] };
+const state = {
+  engine: null,
+  models: [],
+  nodes: [],
+  controller: null,
+  history: [],
+  identifying: {},
+  lastData: null,
+};
 
 const TOKEN_KEY = 'qcluster.token';
 const getToken = () => localStorage.getItem(TOKEN_KEY) || '';
@@ -73,6 +81,7 @@ function connect() {
 }
 
 function render(data) {
+  state.lastData = data;
   state.engine = data.engine;
   state.models = data.models || [];
   state.nodes = data.nodes || [];
@@ -108,10 +117,12 @@ function renderNodes(data) {
     const cpu = s.cpu_percent ?? 0;
     const ram = s.mem_percent ?? 0;
     const temp = s.temp_c != null ? `${s.temp_c} °C` : '—';
-    const actions = node.role === 'host' ? '' : `
+    const actions = `
       <div class="card-actions">
-        <button class="small" data-reprovision="${node.serial}">Reprovision</button>
-        <button class="small" data-rpc="${node.serial}">Restart RPC</button>
+        ${identifyButton(node)}
+        ${node.role === 'host' ? '' : `
+          <button class="small" data-reprovision="${node.serial}">Reprovision</button>
+          <button class="small" data-rpc="${node.serial}">Restart RPC</button>`}
       </div>`;
     return `
       <div class="card">
@@ -268,11 +279,25 @@ function renderSettings(data) {
       </div>
       <div class="card-foot"><span>${node.caps?.board || ''}</span></div>
       <div class="card-actions">
+        ${identifyButton(node)}
         ${node.state === 'decommissioned'
           ? `<button class="small" data-recommission="${node.serial}">Re-enable</button>`
           : `<button class="small danger" data-decommission="${node.serial}">Decommission</button>`}
       </div>
     </div>`).join('') || '<p class="hint">No child boards connected.</p>';
+}
+
+function identifyButton(node) {
+  const supported = Boolean(node.caps?.identify_supported);
+  const active = (state.identifying[node.serial] || 0) > Date.now();
+  const disabled = !supported || node.state === 'lost';
+  const pattern = node.role === 'host'
+    ? 'Blink the host MPU user LED'
+    : `Blink ${node.slot} quick pulse${node.slot === 1 ? '' : 's'}, repeated twice`;
+  const title = supported ? pattern : 'No writable MPU user LED on this board image';
+  return `<button class="small identify${active ? ' identify-active' : ''}"
+                  data-identify="${node.serial}" title="${title}"
+                  ${disabled || active ? 'disabled' : ''}>${active ? 'Blinking…' : 'Identify'}</button>`;
 }
 
 /* ---------- actions ---------- */
@@ -286,6 +311,7 @@ document.addEventListener('click', async (event) => {
     else if (d.delete) await api(`/api/models/${d.delete}`, { method: 'DELETE' });
     else if (d.reprovision) await api(`/api/nodes/${d.reprovision}/reprovision`, { method: 'POST' });
     else if (d.rpc) await api(`/api/nodes/${d.rpc}/rpc/restart`, { method: 'POST' });
+    else if (d.identify) await identifyBoard(d.identify);
     else if (d.decommission) await decommission(d.decommission);
     else if (d.recommission) await api(`/api/nodes/${d.recommission}/recommission`, { method: 'POST' });
     else if (d.sudoSave) await sudoAction('save', d.sudoSave);
@@ -298,6 +324,27 @@ document.addEventListener('click', async (event) => {
     alert(err.message);
   }
 });
+
+async function identifyBoard(serial) {
+  const result = await api(`/api/nodes/${serial}/identify`, {
+    method: 'POST',
+    body: '{}',
+  });
+  const pulses = result.pulses || 1;
+  const duration = serial === 'host' ? 3600 : 2 * (pulses * 440 + 650) + 500;
+  state.identifying[serial] = Date.now() + duration;
+  if (state.lastData) {
+    renderNodes(state.lastData);
+    renderSettings(state.lastData);
+  }
+  setTimeout(() => {
+    delete state.identifying[serial];
+    if (state.lastData) {
+      renderNodes(state.lastData);
+      renderSettings(state.lastData);
+    }
+  }, duration);
+}
 
 async function decommission(serial) {
   const removeApp = confirm(

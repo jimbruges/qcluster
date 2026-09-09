@@ -118,7 +118,7 @@ Open `http://<host-board-ip>:7000`.
 ## Using it
 
 - **Cluster** — every board with live CPU, RAM, temperature and RPC state; pooled RAM
-  total; reprovision and RPC restart controls; the live `llama-server` log.
+  total; Identify, reprovision and RPC restart controls; the live `llama-server` log.
 - **Models** — catalog with a fit indicator (*fits host alone* / *needs pooling* /
   *will not fit*), resumable downloads, load/unload, and a form to add any
   Hugging Face `.gguf` link.
@@ -127,7 +127,8 @@ Open `http://<host-board-ip>:7000`.
   conversation context.
 - **API** — the base URL, current model name, and copy-paste `curl` / `openai` /
   `requests` snippets.
-- **Settings** — host WiFi, board shell passwords, and decommissioning.
+- **Settings** — host WiFi, board shell passwords, physical board identification, and
+  decommissioning.
 
 Any OpenAI client works:
 
@@ -135,6 +136,14 @@ Any OpenAI client works:
 from openai import OpenAI
 client = OpenAI(base_url="http://<host-board-ip>:7000/v1", api_key="not-needed")
 ```
+
+### Identifying a physical board
+
+Press **Identify** on a board card in either Cluster or Settings. QCluster blinks that
+board's MPU-controlled user LED: the host uses a long pulse, while a child blinks its
+slot number in quick pulses, repeated twice. Previous LED brightness and trigger state
+are restored afterward. Firmware images that expose no writable user LED show the
+control disabled rather than attempting an unsafe fallback.
 
 ### Adding your own model
 
