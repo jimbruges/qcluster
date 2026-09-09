@@ -1,0 +1,11 @@
+# Runtime artifacts - never commit
+runtime/
+models/
+logs/
+tools/bin/
+tools/deb/
+state.json
+**/.cache/
+__pycache__/
+*.pyc
+*.gguf
