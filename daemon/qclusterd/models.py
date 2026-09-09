@@ -33,6 +33,11 @@ HF_PATH_RE = re.compile(
     r"^/(?P<owner>[\w.-]+)/(?P<repo>[\w.-]+)/resolve/(?P<rev>[\w.-]+)/(?P<file>[\w./-]+\.gguf)$"
 )
 
+# Weights dominate and the file size is exact, so the requirement is derived from it
+# rather than from a hand-written per-model guess.
+KV_MB_PER_1K_CTX = 120
+RUNTIME_OVERHEAD_MB = 250
+
 
 @dataclass
 class Model:
@@ -43,7 +48,6 @@ class Model:
     file: str
     url: str
     file_size_mb: int
-    ram_mb: int
     ctx_size: int
     notes: str = ""
     custom: bool = False
@@ -51,6 +55,13 @@ class Model:
     @property
     def path(self):
         return config.MODELS_DIR / self.file
+
+    def required_mb(self, ctx_size: int | None = None) -> int:
+        """RAM the whole cluster needs for this model: weights + KV cache + overhead."""
+        ctx = int(ctx_size or self.ctx_size)
+        return int(
+            self.file_size_mb + (ctx / 1024) * KV_MB_PER_1K_CTX + RUNTIME_OVERHEAD_MB
+        )
 
     def downloaded(self) -> bool:
         if not self.path.exists():
@@ -91,11 +102,14 @@ class ModelStore:
     def reload(self) -> None:
         with config.CATALOG_PATH.open() as fh:
             raw = json.load(fh)
+        fields = {f for f in Model.__dataclass_fields__ if f != "custom"}
         models: dict[str, Model] = {}
         for entry in raw.get("models", []):
-            entry = {k: v for k, v in entry.items() if not k.startswith("$")}
+            entry = {k: v for k, v in entry.items() if k in fields}
             models[entry["id"]] = self._validated(Model(**entry))
         for entry in STATE.get("custom_models") or []:
+            # Older saved entries may carry fields that no longer exist.
+            entry = {k: v for k, v in entry.items() if k in fields}
             try:
                 model = self._validated(Model(**entry, custom=True))
             except (TypeError, ValueError) as exc:
@@ -145,8 +159,6 @@ class ModelStore:
         size_mb = max(1, size_bytes // (1024 * 1024))
 
         model_id = self._unique_id(filename)
-        # Weights plus KV cache and runtime overhead; deliberately generous.
-        ram_mb = int(size_mb * 1.15) + 350
         model = Model(
             id=model_id,
             name=name.strip() or filename.replace(".gguf", ""),
@@ -155,7 +167,6 @@ class ModelStore:
             file=filename,
             url=url,
             file_size_mb=size_mb,
-            ram_mb=ram_mb,
             ctx_size=int(ctx_size) or config.DEFAULT_CTX_SIZE,
             notes=f"Added from {match.group('owner')}/{match.group('repo')}",
             custom=True,
@@ -231,7 +242,7 @@ class ModelStore:
                 "quant": model.quant,
                 "file": model.file,
                 "file_size_mb": model.file_size_mb,
-                "ram_mb": model.ram_mb,
+                "required_mb": model.required_mb(),
                 "ctx_size": model.ctx_size,
                 "notes": model.notes,
                 "custom": model.custom,

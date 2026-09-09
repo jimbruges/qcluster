@@ -42,10 +42,15 @@ class Placement:
         self.labels = labels
         self.total_mb = total_mb
         self.needed_mb = needed_mb
+        self.host_mb = 0
 
     @property
     def fits(self) -> bool:
         return self.total_mb >= self.needed_mb
+
+    @property
+    def fits_host_alone(self) -> bool:
+        return self.host_mb >= self.needed_mb
 
     @property
     def pooled(self) -> bool:
@@ -58,7 +63,9 @@ class Placement:
             "labels": self.labels,
             "total_usable_mb": self.total_mb,
             "needed_mb": self.needed_mb,
+            "host_usable_mb": self.host_mb,
             "fits": self.fits,
+            "fits_host_alone": self.fits_host_alone,
             "pooled": self.pooled,
             "tensor_split": self.tensor_split(),
         }
@@ -75,8 +82,7 @@ def plan_placement(model: Model, nodes: list, ctx_size: int | None = None) -> Pl
     Device order matters: llama.cpp registers RPC devices before the local backend,
     so RPC endpoints come first and the host's own share goes last.
     """
-    ctx_overhead_mb = int((ctx_size or model.ctx_size) / 1024 * 120)
-    needed = model.ram_mb + ctx_overhead_mb
+    needed = model.required_mb(ctx_size)
 
     children = [n for n in nodes if not n.is_host and n.state == "ready" and n.rpc_running]
     host = next((n for n in nodes if n.is_host), None)
@@ -91,7 +97,9 @@ def plan_placement(model: Model, nodes: list, ctx_size: int | None = None) -> Pl
 
     total = sum(capacities)
     weights = [c / total for c in capacities] if total > 0 else []
-    return Placement(endpoints, weights, labels, int(total), int(needed))
+    placement = Placement(endpoints, weights, labels, int(total), int(needed))
+    placement.host_mb = int(host.usable_mb()) if host is not None else 0
+    return placement
 
 
 class LlamaEngine:

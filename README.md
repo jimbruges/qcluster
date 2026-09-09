@@ -181,19 +181,39 @@ decommissioned board is back to how it started.
 
 Three boards: one UNO Q 4 GB host plus two UNO Q 2 GB children on a powered USB hub.
 
-| | SmolLM2-360M Q4 | Qwen2.5-1.5B Q4 |
-|---|---|---|
-| Model file | 259 MB | 986 MB |
-| Fits the host board alone? | yes | **no** (820 MB free vs 1740 MB needed) |
-| RSS on host `llama-server` | — | 211 MB |
-| RSS on child slot 1 `rpc-server` | 189 MB | 485 MB |
-| RSS on child slot 2 `rpc-server` | 215 MB | 547 MB |
-| Generation | 8.1 tok/s | 2.8 tok/s |
-| Prompt processing | 16.6 tok/s | 5.2 tok/s |
+| | SmolLM2-360M Q4 | Qwen2.5-1.5B Q4 | Qwen2.5-3B Q4 |
+|---|---|---|---|
+| Model file | 259 MB | 986 MB | 1930 MB |
+| Fits the host board alone? | yes | **no** | **no** |
+| RSS on host `llama-server` | — | 211 MB | 80 MB |
+| RSS on child slot 1 `rpc-server` | 189 MB | 485 MB | 912 MB |
+| RSS on child slot 2 `rpc-server` | 215 MB | 547 MB | 1067 MB |
+| Generation | 8.1 tok/s | 2.8 tok/s | 1.6 tok/s |
+| Prompt processing | 16.6 tok/s | 5.2 tok/s | — |
 
-The 1.5B row is the point of the project: most of the model lives on the two child
-boards, and the host — which could not have held it alone — contributes only 211 MB.
-The cost is throughput, exactly as expected from pipeline-parallel RPC.
+The 3B column is the point of the project: a model that needs more RAM than any
+single board has free runs because nearly all of it lives on the two children, while
+the host holds only 80 MB. Swap was barely touched (27 MB and 82 MB), so the
+placement is tight but not reckless. The cost is throughput, exactly as expected from
+pipeline-parallel RPC.
+
+### How the fit estimate works
+
+The **Fit** column and the loader share one calculation, on the server:
+
+```
+required = model file size + (ctx / 1024) x 120 MB + 250 MB
+available = sum over ready boards of (MemAvailable - reserve)
+```
+
+The file size is exact, so the requirement is derived from it rather than from a
+per-model guess. Reserves are spike cushions on top of `MemAvailable`, which already
+excludes memory in use: 400 MB on the host, 200 MB per child, both overridable with
+`QCLUSTER_HOST_RESERVE_MB` and `QCLUSTER_NODE_RESERVE_MB`. Hover the Fit column to
+see the numbers behind a verdict.
+
+Because availability is measured live, freeing memory on a board (stopping unused
+apps, for instance) can move a model from *will not fit* to *needs pooling*.
 
 ## Performance expectations
 

@@ -81,6 +81,26 @@ class Gateway:
             self._wifi_at = now
         return self._wifi
 
+    def models_with_fit(self) -> list[dict]:
+        """Catalog annotated with the same placement maths the loader uses, so the UI
+        never has to reimplement it."""
+        nodes = self.registry.all()
+        entries = self.store.catalog_dict()
+        for entry in entries:
+            model = self.store.get(entry["id"])
+            if not model:
+                continue
+            placement = plan_placement(model, nodes)
+            entry["fit"] = {
+                "needed_mb": placement.needed_mb,
+                "pooled_mb": placement.total_mb,
+                "host_mb": placement.host_mb,
+                "fits": placement.fits,
+                "fits_host_alone": placement.fits_host_alone,
+                "boards": len(placement.endpoints) + 1,
+            }
+        return entries
+
 
 def _authorised(headers, query_token: str = "") -> bool:
     expected = config.AUTH_TOKEN
@@ -215,7 +235,7 @@ class _Handler(BaseHTTPRequestHandler):
         if path == "/api/cluster":
             return self._json(200, gw.cluster_state())
         if path == "/api/models":
-            return self._json(200, {"models": gw.store.catalog_dict()})
+            return self._json(200, {"models": gw.models_with_fit()})
         if path == "/api/engine":
             return self._json(200, gw.engine.status())
         if path == "/api/engine/logs":
@@ -391,7 +411,7 @@ class _Handler(BaseHTTPRequestHandler):
         try:
             while True:
                 payload = gw.cluster_state()
-                payload["models"] = gw.store.catalog_dict()
+                payload["models"] = gw.models_with_fit()
                 chunk = f"data: {json.dumps(payload)}\n\n".encode()
                 self.wfile.write(chunk)
                 self.wfile.flush()

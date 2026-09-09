@@ -138,18 +138,17 @@ function renderNodes(data) {
   }).join('');
 }
 
-function fitLabel(model, data) {
-  const pooled = state.nodes.filter((n) => n.state === 'ready').length;
-  const total = state.nodes.filter((n) => n.state === 'ready')
-    .reduce((sum, n) => sum + (n.usable_mb || 0), 0);
-  const host = state.nodes.find((n) => n.role === 'host');
-  if (host && model.ram_mb <= (host.usable_mb || 0)) {
-    return '<span class="fit-ok">fits host alone</span>';
+function fitLabel(model) {
+  const fit = model.fit;
+  if (!fit) return '<span class="card-sub">—</span>';
+  const detail = `needs ~${mb(fit.needed_mb)}, ${mb(fit.pooled_mb)} free across ${fit.boards} board${fit.boards === 1 ? '' : 's'}`;
+  if (fit.fits_host_alone) {
+    return `<span class="fit-ok" title="${detail}">fits host alone</span>`;
   }
-  if (model.ram_mb <= total) {
-    return `<span class="fit-pool">needs pooling (${pooled} boards)</span>`;
+  if (fit.fits) {
+    return `<span class="fit-pool" title="${detail}">needs pooling (${fit.boards} boards)</span>`;
   }
-  return '<span class="fit-no">will not fit</span>';
+  return `<span class="fit-no" title="${detail}">needs ${mb(fit.needed_mb)}, ${mb(fit.pooled_mb)} free</span>`;
 }
 
 function renderModels() {

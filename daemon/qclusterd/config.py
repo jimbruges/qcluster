@@ -40,8 +40,10 @@ DISCOVERY_INTERVAL_S = float(os.environ.get("QCLUSTER_DISCOVERY_INTERVAL", "3"))
 TELEMETRY_INTERVAL_S = float(os.environ.get("QCLUSTER_TELEMETRY_INTERVAL", "2"))
 
 # Leave this much RAM to the OS on every board when planning a model placement.
-HOST_RESERVE_MB = int(os.environ.get("QCLUSTER_HOST_RESERVE_MB", "700"))
-NODE_RESERVE_MB = int(os.environ.get("QCLUSTER_NODE_RESERVE_MB", "450"))
+# MemAvailable already excludes what is in use, so these are spike cushions only;
+# every board also has swap as a second net during the load spike.
+HOST_RESERVE_MB = int(os.environ.get("QCLUSTER_HOST_RESERVE_MB", "400"))
+NODE_RESERVE_MB = int(os.environ.get("QCLUSTER_NODE_RESERVE_MB", "200"))
 
 DEFAULT_CTX_SIZE = int(os.environ.get("QCLUSTER_CTX_SIZE", "2048"))
 DEFAULT_THREADS = int(os.environ.get("QCLUSTER_THREADS", "4"))
