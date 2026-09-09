@@ -2,7 +2,7 @@
 runtime/
 models/
 logs/
-tools/bin/
+tools/
 tools/deb/
 state.json
 **/.cache/
