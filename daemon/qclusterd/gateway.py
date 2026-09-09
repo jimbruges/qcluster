@@ -47,6 +47,7 @@ class Gateway:
         self.store = store
         self.engine = engine
         self.cluster_lock = cluster_lock or threading.RLock()
+        self.generation_lock = threading.Lock()
         self._server: ThreadingHTTPServer | None = None
         self._wifi: dict = {"available": False}
         self._wifi_at = 0.0
@@ -135,12 +136,15 @@ class _Handler(BaseHTTPRequestHandler):
     # -- helpers --------------------------------------------------------
     def _json(self, code: int, payload) -> None:
         body = json.dumps(payload).encode()
-        self.send_response(code)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            return
 
     def _body(self) -> dict:
         length = int(self.headers.get("Content-Length") or 0)
@@ -454,6 +458,30 @@ class _Handler(BaseHTTPRequestHandler):
         except ValueError as exc:
             return self._json(413, {"error": str(exc)})
 
+        if method == "POST" and self.path.startswith("/v1/chat/completions"):
+            try:
+                body = self._normalised_chat_body(body or b"{}")
+            except ValueError as exc:
+                return self._json(400, {"error": {"message": str(exc)}})
+
+        if method == "POST" and self.path.startswith(("/v1/chat/completions", "/v1/completions")):
+            if not gw.generation_lock.acquire(blocking=False):
+                return self._json(429, {
+                    "error": {
+                        "message": "another generation is already running on this QCluster",
+                        "type": "busy",
+                    }
+                })
+            try:
+                return self._proxy_locked(method, body)
+            finally:
+                gw.generation_lock.release()
+
+        return self._proxy_locked(method, body)
+
+    def _proxy_locked(self, method: str, body: bytes | None) -> None:
+        gw = self.gateway
+
         upstream = http.client.HTTPConnection(
             config.LLAMA_HOST, config.LLAMA_PORT, timeout=900
         )
@@ -470,20 +498,75 @@ class _Handler(BaseHTTPRequestHandler):
         ctype = response.getheader("Content-Type", "application/json")
         streaming = "event-stream" in ctype
 
-        self.send_response(response.status)
-        self.send_header("Content-Type", ctype)
-        self.send_header("Cache-Control", "no-store")
-        if streaming:
-            self.send_header("Connection", "keep-alive")
-            self.end_headers()
-            self._relay_stream(response)
-        else:
-            payload = response.read()
-            self.send_header("Content-Length", str(len(payload)))
-            self.end_headers()
-            self.wfile.write(payload)
-            self._capture_metrics(payload)
-        upstream.close()
+        try:
+            self.send_response(response.status)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Cache-Control", "no-store")
+            if streaming:
+                self.send_header("Connection", "keep-alive")
+                self.end_headers()
+                self._relay_stream(response)
+            else:
+                payload = response.read()
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+                self._capture_metrics(payload)
+        except (BrokenPipeError, ConnectionResetError, OSError, http.client.HTTPException):
+            return
+        finally:
+            upstream.close()
+
+    def _normalised_chat_body(self, body: bytes) -> bytes:
+        """Mistral's template rejects system messages; fold them into the first user turn."""
+        try:
+            payload = json.loads(body)
+        except json.JSONDecodeError as exc:
+            raise ValueError("invalid JSON body") from exc
+
+        model = str(payload.get("model") or self.gateway.engine.model_id or "")
+        if "mistral" not in model.lower():
+            return body
+
+        messages = payload.get("messages")
+        if not isinstance(messages, list):
+            return body
+
+        system_parts: list[str] = []
+        cleaned: list[dict] = []
+        for message in messages:
+            if not isinstance(message, dict):
+                continue
+            role = message.get("role")
+            content = message.get("content")
+            if role == "system":
+                if content:
+                    system_parts.append(str(content))
+                continue
+            if role in ("user", "assistant"):
+                cleaned.append({"role": role, "content": "" if content is None else str(content)})
+
+        if system_parts:
+            prefix = "System instructions:\n" + "\n".join(system_parts).strip()
+            for message in cleaned:
+                if message["role"] == "user":
+                    message["content"] = f"{prefix}\n\nUser message:\n{message['content']}"
+                    break
+            else:
+                cleaned.append({"role": "user", "content": prefix})
+
+        alternated: list[dict] = []
+        for message in cleaned:
+            if not alternated and message["role"] != "user":
+                continue
+            if alternated and alternated[-1]["role"] == message["role"]:
+                if message["role"] == "user":
+                    alternated[-1]["content"] += "\n\n" + message["content"]
+                continue
+            alternated.append(message)
+
+        payload["messages"] = alternated or [{"role": "user", "content": ""}]
+        return json.dumps(payload).encode()
 
     def _relay_stream(self, response) -> None:
         buffer = b""
@@ -495,7 +578,7 @@ class _Handler(BaseHTTPRequestHandler):
                 self.wfile.write(chunk)
                 self.wfile.flush()
                 buffer = (buffer + chunk)[-8192:]
-        except (BrokenPipeError, ConnectionResetError, OSError):
+        except (BrokenPipeError, ConnectionResetError, OSError, http.client.HTTPException):
             return
         # The final SSE frame of a llama-server stream carries the timing block.
         for line in reversed(buffer.split(b"\n")):

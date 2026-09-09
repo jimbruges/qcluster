@@ -101,6 +101,13 @@ function renderEngine(data) {
   else if (engine.state === 'loading') label.textContent = `loading ${engine.model_id}… ${engine.load_percent}%`;
   else if (engine.state === 'error') label.textContent = engine.error || 'engine error';
   else label.textContent = 'no model loaded';
+  tuneChatDefaults(engine.model_id);
+}
+
+function tuneChatDefaults(modelId) {
+  const maxTokens = $('max-tokens');
+  if (!maxTokens || maxTokens.dataset.userEdited) return;
+  maxTokens.value = String((modelId || '').toLowerCase().includes('7b') ? 32 : 256);
 }
 
 function renderNodes(data) {
@@ -542,6 +549,10 @@ $('prompt').addEventListener('keydown', (event) => {
   }
 });
 
+$('max-tokens').addEventListener('input', () => {
+  $('max-tokens').dataset.userEdited = '1';
+});
+
 $('stop').addEventListener('click', () => state.controller?.abort());
 
 $('clear-chat').addEventListener('click', () => {
@@ -570,8 +581,12 @@ $('chat-form').addEventListener('submit', async (event) => {
 
   $('prompt').value = '';
   addMessage('user', prompt);
-  state.history.push({ role: 'user', content: prompt });
-  const bubble = addMessage('assistant', '');
+  const outboundHistory = [...state.history.slice(-8), { role: 'user', content: prompt }];
+  const slowModel = (state.engine?.model_id || '').toLowerCase().includes('7b');
+  const bubble = addMessage(
+    'assistant pending',
+    slowModel ? 'Waiting for first token… Mistral 7B can take around 30 seconds.' : 'Waiting for first token…'
+  );
   const started = performance.now();
   let firstToken = null;
   let answer = '';
@@ -589,7 +604,7 @@ $('chat-form').addEventListener('submit', async (event) => {
         model: state.engine.alias,
         messages: [
           { role: 'system', content: $('system-prompt').value },
-          ...state.history.slice(-8),
+          ...outboundHistory,
         ],
         max_tokens: Number($('max-tokens').value),
         temperature: Number($('temperature').value),
@@ -597,7 +612,7 @@ $('chat-form').addEventListener('submit', async (event) => {
         stream: true,
       }),
     });
-    if (!response.ok) throw new Error((await response.text()).slice(0, 300));
+    if (!response.ok) throw new Error(await responseError(response));
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
@@ -617,24 +632,46 @@ $('chat-form').addEventListener('submit', async (event) => {
           if (delta) {
             if (firstToken === null) firstToken = performance.now() - started;
             answer += delta;
+            bubble.className = 'msg assistant';
             bubble.textContent = answer;
             $('messages').scrollTop = $('messages').scrollHeight;
           }
         } catch { /* keepalive or partial frame */ }
       }
     }
-    state.history.push({ role: 'assistant', content: answer });
     const elapsed = (performance.now() - started) / 1000;
     $('metrics').textContent =
-      `${elapsed.toFixed(1)} s total · first token ${(firstToken / 1000 || 0).toFixed(1)} s`;  } catch (err) {
-    if (err.name !== 'AbortError') bubble.className = 'msg error', bubble.textContent = err.message;
+      `${elapsed.toFixed(1)} s total · first token ${(firstToken / 1000 || 0).toFixed(1)} s`;
+  } catch (err) {
+    if (err.name !== 'AbortError') {
+      bubble.className = 'msg error';
+      bubble.textContent = err.message;
+    }
   } finally {
+    if (answer) {
+      state.history.push({ role: 'user', content: prompt });
+      state.history.push({ role: 'assistant', content: answer });
+    }
     $('send').disabled = false;
     $('stop').hidden = true;
     state.controller = null;
     updateContextNote();
   }
 });
+
+async function responseError(response) {
+  const text = await response.text();
+  try {
+    const body = JSON.parse(text);
+    const message = body.error?.message || body.error || response.statusText;
+    if (response.status === 429) {
+      return `${message}. Wait for the current response to finish or press Stop.`;
+    }
+    return message;
+  } catch {
+    return text.slice(0, 300) || response.statusText;
+  }
+}
 
 updateContextNote();
 connect();
