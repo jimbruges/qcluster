@@ -28,15 +28,16 @@ docker run --rm -v "$SRC:/src" -e JOBS="$JOBS" \
       -DLLAMA_BUILD_TESTS=OFF \
       -DCMAKE_BUILD_TYPE=Release
     cmake --build /src/build --config Release -j "$JOBS" \
-      --target llama-server llama-cli rpc-server
+      --target llama-server llama-cli ggml-rpc-server
     chown -R "$HOST_UID:$HOST_GID" /src/build
   '
 
 echo "== staging runtime =="
 install -d "$OUT"
-for b in llama-server llama-cli rpc-server; do
-  install -m 0755 "$SRC/build/bin/$b" "$OUT/$b"
-done
+install -m 0755 "$SRC/build/bin/llama-server" "$OUT/llama-server"
+install -m 0755 "$SRC/build/bin/llama-cli" "$OUT/llama-cli"
+# Upstream calls it ggml-rpc-server; keep a stable name for the provisioner.
+install -m 0755 "$SRC/build/bin/ggml-rpc-server" "$OUT/rpc-server"
 find "$SRC/build/bin" -name '*.so*' -exec install -m 0755 {} "$OUT/" \;
 
 python3 "$ROOT/scripts/make-manifest.py" "$OUT"

@@ -31,7 +31,7 @@ chmod +x {config.NODE_RUNTIME_DIR}/rpc-server 2>/dev/null
 cd {config.NODE_ROOT}
 LD_LIBRARY_PATH={config.NODE_RUNTIME_DIR} LLAMA_CACHE={config.NODE_CACHE_DIR} \
   setsid nohup {config.NODE_RUNTIME_DIR}/rpc-server \
-  --host 127.0.0.1 --port {config.NODE_RPC_PORT} --cache \
+  --host 127.0.0.1 --port {config.NODE_RPC_PORT} --threads 4 --cache \
   > {RPC_LOG} 2>&1 < /dev/null &
 echo $! > {RPC_PIDFILE}
 sleep 1

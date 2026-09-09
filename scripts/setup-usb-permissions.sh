@@ -16,13 +16,13 @@ RULES=/etc/udev/rules.d/51-arduino-uno-q-adb.rules
 getent group plugdev >/dev/null || groupadd -r plugdev
 usermod -aG plugdev "$TARGET_USER"
 
-# 2341:0078 is the UNO Q; 2341 covers other Arduino boards on the same hub.
-cat > "$RULES" <<'EOF'
-SUBSYSTEM=="usb", ATTR{idVendor}=="2341", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+# OWNER= gives $TARGET_USER access immediately; relying on the plugdev group alone
+# would need a re-login before adb could claim the boards.
+cat > "$RULES" <<EOF
+SUBSYSTEM=="usb", ATTR{idVendor}=="2341", MODE="0660", OWNER="$TARGET_USER", GROUP="plugdev", TAG+="uaccess"
 EOF
 
 udevadm control --reload-rules
 udevadm trigger --subsystem-match=usb --action=add
 
-echo "done. '$TARGET_USER' added to plugdev and udev rules installed."
-echo "Log out and back in (or run 'newgrp plugdev') for the group to take effect."
+echo "done. udev rules installed; '$TARGET_USER' owns Arduino USB devices."

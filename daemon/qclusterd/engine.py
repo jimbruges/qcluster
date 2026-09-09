@@ -153,6 +153,10 @@ class LlamaEngine:
                 "--ctx-size", str(ctx),
                 "--threads", str(int(threads or config.DEFAULT_THREADS)),
                 "--no-webui",
+                # Thinking mode is unusable at this speed: minutes of hidden
+                # reasoning per reply, often looping without an answer.
+                "--reasoning", "off",
+                "--reasoning-budget", "0",
             ]
             if placement.endpoints:
                 argv += ["--rpc", ",".join(placement.endpoints), "--n-gpu-layers", "999"]
