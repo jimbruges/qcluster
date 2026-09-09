@@ -16,7 +16,7 @@ from . import config
 log = logging.getLogger("qclusterd.adb")
 
 SERIAL_RE = re.compile(r"^[A-Za-z0-9._:-]{4,64}$")
-DEFAULT_TIMEOUT = 20
+DEFAULT_TIMEOUT = 45
 NO_PERMISSIONS = "no-usb-permission"
 
 
@@ -45,13 +45,19 @@ def _validate(serial: str) -> str:
 
 def _run(argv: list[str], timeout: int = DEFAULT_TIMEOUT, check: bool = True,
          input_bytes: bytes | None = None) -> subprocess.CompletedProcess:
-    proc = subprocess.run(
-        [config.ADB_BIN, *argv],
-        capture_output=True,
-        timeout=timeout,
-        input=input_bytes,
-        check=False,
-    )
+    try:
+        proc = subprocess.run(
+            [config.ADB_BIN, *argv],
+            capture_output=True,
+            timeout=timeout,
+            input=input_bytes,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        # A loaded board can be slow to answer; callers treat this as transient.
+        raise AdbError(f"adb {argv[0] if argv else ''} timed out after {timeout}s") from exc
+    except FileNotFoundError as exc:
+        raise AdbError(f"adb binary not found at {config.ADB_BIN}") from exc
     if check and proc.returncode != 0:
         stderr = proc.stderr.decode(errors="replace").strip()
         raise AdbError(f"adb {' '.join(argv)} failed ({proc.returncode}): {stderr}")

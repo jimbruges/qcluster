@@ -27,11 +27,12 @@ SSE_INTERVAL_S = 1.0
 
 
 class Gateway:
-    def __init__(self, registry, provisioner, store, engine) -> None:
+    def __init__(self, registry, provisioner, store, engine, cluster_lock=None) -> None:
         self.registry = registry
         self.provisioner = provisioner
         self.store = store
         self.engine = engine
+        self.cluster_lock = cluster_lock or threading.RLock()
         self._server: ThreadingHTTPServer | None = None
 
     def serve_forever(self) -> None:
@@ -209,7 +210,8 @@ class _Handler(BaseHTTPRequestHandler):
                     "placement": placement.as_dict(),
                 })
             try:
-                gw.engine.start(model, placement, ctx_size=ctx, threads=threads)
+                with gw.cluster_lock:
+                    gw.engine.start(model, placement, ctx_size=ctx, threads=threads)
             except RuntimeError as exc:
                 return self._json(400, {"error": str(exc)})
             return self._json(200, gw.engine.status())

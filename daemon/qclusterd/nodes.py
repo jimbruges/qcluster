@@ -212,6 +212,10 @@ class NodeRegistry:
             if n.state == STATE_READY and not n.rpc_running and n.stats
         ]
 
+    def recoverable(self) -> list[Node]:
+        """Boards adb can still see but that failed to provision."""
+        return [n for n in self.children() if n.state == STATE_ERROR]
+
     def snapshot(self) -> dict:
         nodes = [n.as_dict() for n in self.all()]
         ready = [n for n in self.all() if n.state == STATE_READY]
@@ -292,8 +296,9 @@ class NodeRegistry:
 
     def _sample_child(self, node: Node) -> None:
         try:
-            text = adb.shell_script(node.serial, PROBE_SCRIPT, timeout=15)
+            text = adb.shell_script(node.serial, PROBE_SCRIPT, timeout=30)
         except (adb.AdbError, OSError) as exc:
+            # Telemetry is best-effort: a slow board must not flip it to "error".
             log.debug("telemetry failed for %s: %s", node.serial, exc)
             return
         cpu_line = ""

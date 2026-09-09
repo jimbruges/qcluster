@@ -57,10 +57,13 @@ fi
 
 
 class Provisioner:
-    def __init__(self, registry) -> None:
+    def __init__(self, registry, cluster_lock: threading.RLock | None = None) -> None:
         self._registry = registry
         self._locks: dict[str, threading.Lock] = {}
         self._global = threading.Lock()
+        # Shared with the engine: re-creating a port forward under a running
+        # llama-server breaks its RPC connection mid-flight.
+        self._cluster = cluster_lock or threading.RLock()
 
     def _lock_for(self, serial: str) -> threading.Lock:
         with self._global:
@@ -73,7 +76,7 @@ class Provisioner:
         ).start()
 
     def provision(self, node: Node, force: bool = False) -> bool:
-        with self._lock_for(node.serial):
+        with self._lock_for(node.serial), self._cluster:
             try:
                 node.state = STATE_PROVISIONING
                 node.error = None
@@ -137,7 +140,7 @@ class Provisioner:
                 raw = adb.shell_script(
                     node.serial,
                     f"cat {config.NODE_RUNTIME_DIR}/manifest.json 2>/dev/null || echo '{{}}'",
-                    timeout=15,
+                    timeout=45,
                 )
                 remote = json.loads(raw.strip() or "{}")
             except (adb.AdbError, json.JSONDecodeError):
@@ -206,6 +209,8 @@ class Provisioner:
         node.rpc_running = True
 
     def _setup_forward(self, node: Node) -> None:
+        if self._port_open(node.rpc_host_port):
+            return
         adb.forward_remove(node.serial, node.rpc_host_port)
         adb.forward(node.serial, node.rpc_host_port, config.NODE_RPC_PORT)
         deadline = time.time() + 15

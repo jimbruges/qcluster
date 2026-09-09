@@ -7,6 +7,7 @@ import logging
 import signal
 import sys
 import threading
+import time
 
 from . import config
 from .engine import LlamaEngine, plan_placement
@@ -31,12 +32,17 @@ class Daemon:
         self.store = ModelStore()
         self.engine = LlamaEngine()
         self.registry = NodeRegistry(on_added=self._on_node_added, on_lost=self._on_node_lost)
-        self.provisioner = Provisioner(self.registry)
-        self.gateway = Gateway(self.registry, self.provisioner, self.store, self.engine)
+        self.cluster_lock = threading.RLock()
+        self.provisioner = Provisioner(self.registry, self.cluster_lock)
+        self.gateway = Gateway(
+            self.registry, self.provisioner, self.store, self.engine, self.cluster_lock
+        )
         self._log = logging.getLogger("qclusterd")
+        self._retries: dict[str, tuple[int, float]] = {}
 
     def _on_node_added(self, node) -> None:
         self._log.info("provisioning board %s (slot %d)", node.serial, node.slot)
+        self._retries.pop(node.serial, None)
         self.provisioner.provision_async(node)
 
     def _on_node_lost(self, node) -> None:
@@ -54,7 +60,7 @@ class Daemon:
                 self.engine.state = "error"
 
     def _supervise(self, stop: threading.Event) -> None:
-        """Restart rpc-server on any ready board where it has died."""
+        """Restart rpc-server where it has died, and retry boards that failed to provision."""
         while not stop.wait(10):
             for node in self.registry.ready_nodes_missing_rpc():
                 self._log.warning(
@@ -65,6 +71,27 @@ class Daemon:
                     self.provisioner.provision(node)
                 except Exception:
                     self._log.exception("could not recover board %s", node.serial)
+
+            for node in self.registry.recoverable():
+                # Errors here are usually a transient adb timeout on a busy board.
+                if not self._retry_due(node.serial):
+                    continue
+                self._log.info("retrying board %s (slot %d)", node.serial, node.slot)
+                try:
+                    self.provisioner.provision(node)
+                    self._retries.pop(node.serial, None)
+                except Exception:
+                    self._log.exception("retry failed for board %s", node.serial)
+
+    def _retry_due(self, serial: str) -> bool:
+        """Exponential backoff so a permanently broken board is not retried in a loop."""
+        now = time.monotonic()
+        attempts, next_at = self._retries.get(serial, (0, 0.0))
+        if now < next_at:
+            return False
+        attempts += 1
+        self._retries[serial] = (attempts, now + min(30 * 2 ** (attempts - 1), 600))
+        return True
 
     def run(self) -> None:
         self.registry.start()
