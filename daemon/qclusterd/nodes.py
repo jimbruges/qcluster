@@ -27,6 +27,8 @@ PROBE_SCRIPT = (
     "echo \"cores $(nproc)\"; "
     "echo \"temp $(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null || echo -1)\"; "
     "echo \"diskfree $(df -Pm /home/arduino | awk 'NR==2{print $4}')\"; "
+    # -x matches the process name exactly, so pgrep cannot match its own -f pattern.
+    "echo \"rpc $(pgrep -c -x rpc-server || echo 0)\"; "
     "echo \"board $(tr -d '\\0' < /sys/firmware/devicetree/base/compatible | head -c 32)\""
 )
 
@@ -142,6 +144,7 @@ def parse_probe(text: str, cpu_percent: float) -> tuple[dict, dict]:
         "cores": stats["cores"],
         "disk_free_mb": int(num("diskfree")),
         "board": values.get("board", "").strip() or "unknown",
+        "rpc_count": int(num("rpc")),
     }
     return stats, caps
 
@@ -202,6 +205,12 @@ class NodeRegistry:
 
     def ready_children(self) -> list[Node]:
         return [n for n in self.children() if n.state == STATE_READY and n.rpc_running]
+
+    def ready_nodes_missing_rpc(self) -> list[Node]:
+        return [
+            n for n in self.children()
+            if n.state == STATE_READY and not n.rpc_running and n.stats
+        ]
 
     def snapshot(self) -> dict:
         nodes = [n.as_dict() for n in self.all()]
@@ -303,6 +312,10 @@ class NodeRegistry:
         with self._lock:
             node.stats = stats
             node.caps = caps
+            if node.state == STATE_READY:
+                node.rpc_running = caps.pop("rpc_count", 0) > 0
+            else:
+                caps.pop("rpc_count", None)
 
     def _telemetry_once(self) -> None:
         self._sample_host()

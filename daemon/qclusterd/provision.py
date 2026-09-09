@@ -180,12 +180,13 @@ class Provisioner:
         try:
             running = adb.shell_script(
                 node.serial,
-                "arduino-app-cli app list 2>/dev/null | grep -c 'q-cluster-display.*RUNNING' || true",
-                timeout=30,
+                "arduino-app-cli app list 2>/dev/null "
+                "| grep -i 'q-cluster-display' | grep -ic 'running' || true",
+                timeout=45,
             ).strip()
         except adb.AdbError:
             running = "0"
-        if running.endswith("1"):
+        if running and running.splitlines()[-1].strip() != "0":
             return
         log.info("installing display app on %s", node.serial)
         adb.shell_script(node.serial, f"mkdir -p {config.NODE_APP_DIR}", timeout=15)

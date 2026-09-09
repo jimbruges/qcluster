@@ -53,9 +53,25 @@ class Daemon:
                 )
                 self.engine.state = "error"
 
+    def _supervise(self, stop: threading.Event) -> None:
+        """Restart rpc-server on any ready board where it has died."""
+        while not stop.wait(10):
+            for node in self.registry.ready_nodes_missing_rpc():
+                self._log.warning(
+                    "rpc-server not running on %s (slot %d) - restarting",
+                    node.serial, node.slot,
+                )
+                try:
+                    self.provisioner.provision(node)
+                except Exception:
+                    self._log.exception("could not recover board %s", node.serial)
+
     def run(self) -> None:
         self.registry.start()
         stop = threading.Event()
+        threading.Thread(
+            target=self._supervise, args=(stop,), name="supervisor", daemon=True
+        ).start()
 
         def _shutdown(*_):
             self._log.info("shutting down")

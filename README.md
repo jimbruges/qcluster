@@ -124,6 +124,24 @@ from openai import OpenAI
 client = OpenAI(base_url="http://<host-board-ip>:7000/v1", api_key="not-needed")
 ```
 
+## Measured results
+
+Three boards: one UNO Q 4 GB host plus two UNO Q 2 GB children on a powered USB hub.
+
+| | SmolLM2-360M Q4 | Qwen2.5-1.5B Q4 |
+|---|---|---|
+| Model file | 259 MB | 986 MB |
+| Fits the host board alone? | yes | **no** (820 MB free vs 1740 MB needed) |
+| RSS on host `llama-server` | — | 211 MB |
+| RSS on child slot 1 `rpc-server` | 189 MB | 485 MB |
+| RSS on child slot 2 `rpc-server` | 215 MB | 547 MB |
+| Generation | 8.1 tok/s | 2.8 tok/s |
+| Prompt processing | 16.6 tok/s | 5.2 tok/s |
+
+The 1.5B row is the point of the project: most of the model lives on the two child
+boards, and the host — which could not have held it alone — contributes only 211 MB.
+The cost is throughput, exactly as expected from pipeline-parallel RPC.
+
 ## Performance expectations
 
 Pooling buys model **size**, not speed. RPC is pipeline-parallel: boards take turns on
@@ -135,6 +153,22 @@ tradeoff stays visible.
 Weights are streamed to each board on first load, which is slow over USB.
 `rpc-server --cache` keeps them on the board so subsequent loads of the same model are
 fast.
+
+Pooled capacity is what the boards have *free*, not what they have installed. Each
+child spends roughly 700–900 MB on Linux and the Arduino app runtime, so two 2 GB
+children contribute around 400–550 MB each in practice. Stopping unused apps on the
+children is the cheapest way to make room for a bigger model.
+
+## Resilience
+
+- A dead `rpc-server` is detected within one telemetry tick and restarted
+  automatically; provisioning is idempotent, so recovery costs one round-trip.
+- If a board holding model layers disconnects, `llama-server` cannot continue —
+  the daemon stops it and reports which board went away, rather than leaving a wedged
+  process behind.
+- Unplug and replug a board and it is rediscovered, keeps its original slot (and
+  therefore its RPC port), and is reprovisioned without any manual step.
+
 
 ## Security notes
 
