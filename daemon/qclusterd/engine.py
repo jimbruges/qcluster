@@ -28,11 +28,14 @@ STATE_LOADING = "loading"
 STATE_READY = "ready"
 STATE_ERROR = "error"
 
-# llama.cpp always skips CPU backends when building its tensor-split device list, so
-# the host's own share is never actually usable as a split target - only the RPC
-# endpoints are. Its hard cap is llama_max_devices() (16); passing that many (or
-# more) --tensor-split entries is rejected, so we cap at 15.
-MAX_TENSOR_SPLIT_DEVICES = 15
+# ggml's backend scheduler hard-caps total backends (GGML_SCHED_MAX_BACKENDS = 16,
+# ggml/src/ggml-backend.cpp) - RPC devices plus the one CPU backend llama-server
+# always adds. This is a real GGML_ASSERT, not just a CLI-argument limit: exceeding
+# it aborts the process (verified against real hardware - a 16th RPC board crashes
+# llama-server with "GGML_ASSERT(n_backends <= GGML_SCHED_MAX_BACKENDS) failed").
+# So at most 15 RPC endpoints can ever be used at once, no matter how many boards
+# are provisioned; --tensor-split then always fits within its own 15-entry limit too.
+MAX_RPC_ENDPOINTS = 15
 
 LISTENING_RE = re.compile(r"(server is listening|HTTP server listening|starting the main loop)", re.I)
 PROGRESS_RE = re.compile(r"load_tensors:.*?(\d+)%")
@@ -50,6 +53,7 @@ class Placement:
         self.needed_mb = needed_mb
         self.host_mb = 0
         self.reclaimed = False
+        self.excluded_boards = 0
 
     @property
     def fits(self) -> bool:
@@ -76,30 +80,17 @@ class Placement:
             "reclaimed": self.reclaimed,
             "pooled": self.pooled,
             "tensor_split": self.tensor_split(),
-            "auto_split": self.auto_split,
+            "excluded_boards": self.excluded_boards,
         }
 
     def tensor_split(self) -> str | None:
         # Only RPC endpoints ever get a device slot for tensor-split; the host's
         # share (appended last, see plan_placement) is never a split target.
-        # Past MAX_TENSOR_SPLIT_DEVICES entries, llama.cpp's arg parser rejects
-        # the flag outright, so auto_split() takes over instead.
-        if len(self.endpoints) > MAX_TENSOR_SPLIT_DEVICES:
-            return None
+        # plan_placement() already caps endpoints at MAX_RPC_ENDPOINTS, so this
+        # never exceeds llama.cpp's own --tensor-split entry limit.
         if len(self.endpoints) < 2:
             return None
         return ",".join(f"{w:.3f}" for w in self.weights[:len(self.endpoints)])
-
-    @property
-    def auto_split(self) -> bool:
-        """True when the endpoint count forces llama.cpp's own free-memory split.
-
-        Beyond MAX_TENSOR_SPLIT_DEVICES boards, --tensor-split can no longer be
-        passed at all, so llama.cpp falls back to splitting by each RPC device's
-        live free memory. That has no configurable safety margin (unlike
-        QCluster's reserve-aware placement), so it only kicks in past the CLI cap.
-        """
-        return len(self.endpoints) > MAX_TENSOR_SPLIT_DEVICES
 
 
 def plan_placement(model: Model, nodes: list, ctx_size: int | None = None,
@@ -117,6 +108,15 @@ def plan_placement(model: Model, nodes: list, ctx_size: int | None = None,
     children = [n for n in nodes if not n.is_host and n.state == "ready" and n.rpc_running]
     host = next((n for n in nodes if n.is_host), None)
 
+    # Exceeding MAX_RPC_ENDPOINTS crashes llama-server outright (ggml's backend
+    # scheduler hard-caps total backends), so keep the highest-capacity boards and
+    # drop the rest rather than ever attempting to use them all.
+    excluded = 0
+    if len(children) > MAX_RPC_ENDPOINTS:
+        children = sorted(children, key=lambda n: n.capacity_mb(reclaim), reverse=True)
+        excluded = len(children) - MAX_RPC_ENDPOINTS
+        children = children[:MAX_RPC_ENDPOINTS]
+
     endpoints = [n.rpc_endpoint for n in children]
     labels = [f"slot{n.slot} ({n.serial[:8]})" for n in children]
     capacities = [float(n.capacity_mb(reclaim)) for n in children]
@@ -130,6 +130,7 @@ def plan_placement(model: Model, nodes: list, ctx_size: int | None = None,
     placement = Placement(endpoints, weights, labels, int(total), int(needed))
     placement.host_mb = int(host.capacity_mb(reclaim)) if host is not None else 0
     placement.reclaimed = reclaim and any(n.reclaimable_mb for n in nodes)
+    placement.excluded_boards = excluded
     return placement
 
 
@@ -202,13 +203,12 @@ class LlamaEngine:
                 split = placement.tensor_split()
                 if split:
                     argv += ["--tensor-split", split]
-                elif placement.auto_split:
-                    log.warning(
-                        "%d RPC endpoints exceeds llama.cpp's --tensor-split cap (%d); "
-                        "falling back to its own free-memory auto-split, which has no "
-                        "configurable safety margin",
-                        len(placement.endpoints), MAX_TENSOR_SPLIT_DEVICES,
-                    )
+            if placement.excluded_boards:
+                log.warning(
+                    "%d ready board(s) excluded from this load: ggml's backend "
+                    "scheduler caps total backends at %d (%d RPC + 1 CPU)",
+                    placement.excluded_boards, MAX_RPC_ENDPOINTS + 1, MAX_RPC_ENDPOINTS,
+                )
 
             env = dict(os.environ)
             env["LD_LIBRARY_PATH"] = str(config.RUNTIME_DIR) + (

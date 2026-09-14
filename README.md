@@ -241,18 +241,21 @@ This is a proof that pooling scales to this size at all, not a usable chat
 experience: at ~7 s/token, even a three-word reply takes minutes, and every token
 still has to cross all 15 RPC hops.
 
-### Scaling past 16 boards
+### Scaling past 15 RPC boards
 
-`llama_max_devices()` (16) is only a limit on the `--tensor-split` **CLI flag** — the
-underlying buffer holds 128 floats, and `--rpc` itself has no device-count limit at
-all. Past 15 RPC endpoints, QCluster stops passing `--tensor-split` entirely and lets
-llama.cpp auto-balance layers by each RPC device's live free memory instead
-(`ggml_backend_dev_memory()`, queried fresh at load time). The Models tab flags this
-as *(auto-split)* in the fit indicator, because it trades away QCluster's
-reserve-aware placement — llama.cpp's own split has no configurable safety margin, so
-a board can be loaded right up to its momentary free-memory edge. Below 16 boards,
-placement is unchanged: the explicit, reserve-aware split QCluster computes from its
-own telemetry is still what runs.
+15 RPC endpoints is a hard ceiling, not a QCluster convention: ggml's backend
+scheduler caps total backends (`GGML_SCHED_MAX_BACKENDS`, `ggml/src/ggml-backend.cpp`)
+at 16, and llama-server always adds one CPU backend on top of the RPC devices. Verified
+against real hardware — plugging in a 16th child board and letting it into the RPC list
+crashes `llama-server` outright with `GGML_ASSERT(n_backends <= GGML_SCHED_MAX_BACKENDS)
+failed`, independent of `--tensor-split`. (An earlier version of this note claimed
+dropping `--tensor-split` could scale past this; that was wrong — the assert fires at
+scheduler creation regardless of the flag.)
+
+So with more than 15 ready child boards, QCluster keeps the 15 with the most usable
+RAM and excludes the rest from that load — they stay `ready` and are simply not part of
+the current placement. The Models tab shows *(N excluded)* when this happens, and the
+board count/weights in the fit tooltip only cover the boards actually in use.
 
 
 

@@ -184,22 +184,23 @@ function fitLabel(model) {
   const fit = model.fit;
   if (!fit) return '<span class="card-sub">—</span>';
   const after = fit.reclaimed ? ' after unloading the current model' : '';
-  const autoSplitNote = fit.auto_split
-    ? ' Beyond 15 RPC boards, llama.cpp drops --tensor-split and auto-balances by '
-      + 'live free memory instead, with no configurable safety margin.'
+  const excludedNote = fit.excluded_boards
+    ? ` ${fit.excluded_boards} lowest-capacity board(s) excluded: ggml's backend `
+      + `scheduler caps total backends at 16 (15 RPC + 1 CPU).`
     : '';
   const detail = `needs ~${mb(fit.needed_mb)}, ${mb(fit.pooled_mb)} free across `
-    + `${fit.boards} board${fit.boards === 1 ? '' : 's'}${after}.${autoSplitNote}`;
+    + `${fit.boards} board${fit.boards === 1 ? '' : 's'}${after}.${excludedNote}`;
   if (fit.loaded) {
     return `<span class="fit-ok" title="${detail}">loaded now</span>`;
   }
   const note = fit.reclaimed ? ' <span class="card-sub">(after unload)</span>' : '';
-  const autoBadge = fit.auto_split ? ' <span class="card-sub">(auto-split)</span>' : '';
+  const excludedBadge = fit.excluded_boards
+    ? ` <span class="card-sub">(${fit.excluded_boards} excluded)</span>` : '';
   if (fit.fits_host_alone) {
     return `<span class="fit-ok" title="${detail}">fits host alone</span>${note}`;
   }
   if (fit.fits) {
-    return `<span class="fit-pool" title="${detail}">needs pooling (${fit.boards} boards)</span>${note}${autoBadge}`;
+    return `<span class="fit-pool" title="${detail}">needs pooling (${fit.boards} boards)</span>${note}${excludedBadge}`;
   }
   return `<span class="fit-no" title="${detail}">needs ${mb(fit.needed_mb)}, ${mb(fit.pooled_mb)} free</span>`;
 }
