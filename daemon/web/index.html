@@ -28,6 +28,7 @@
     <div class="cards" id="node-cards"></div>
     <div class="row">
       <button id="rescan">Rescan for boards</button>
+      <button id="provision-all">Provision all boards</button>
     </div>
     <h3>Engine log</h3>
     <pre id="engine-log" class="log">no engine running</pre>
@@ -76,6 +77,13 @@
     </div>
     <div id="messages" class="messages"></div>
     <div id="metrics" class="metrics"></div>
+    <div class="controls">
+      <label class="grow">Benchmark prompt
+        <select id="benchmark-prompt">
+          <option value="">Choose a prompt to fill it in…</option>
+        </select>
+      </label>
+    </div>
     <form id="chat-form" class="composer">
       <textarea id="prompt" rows="2" placeholder="Ask the cluster something… (Enter to send, Shift+Enter for newline)"></textarea>
       <button type="submit" id="send">Send</button>

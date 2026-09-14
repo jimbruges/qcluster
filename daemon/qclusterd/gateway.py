@@ -19,6 +19,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import config, credentials, identify, wifi
 from .engine import plan_placement
+from .nodes import STATE_DECOMMISSIONED, STATE_PROVISIONING
 from .state import STATE
 
 log = logging.getLogger("qclusterd.gateway")
@@ -326,6 +327,15 @@ class _Handler(BaseHTTPRequestHandler):
         if path == "/api/nodes/rescan":
             gw.registry._discover_once()
             return self._json(200, gw.registry.snapshot())
+
+        if path == "/api/nodes/provision-all":
+            targets = [
+                n for n in gw.registry.children()
+                if n.state not in (STATE_PROVISIONING, STATE_DECOMMISSIONED)
+            ]
+            for node in targets:
+                gw.provisioner.provision_async(node)
+            return self._json(202, {"ok": True, "count": len(targets)})
 
         if path == "/api/wifi/connect":
             ssid = str(body.get("ssid", "")).strip()

@@ -13,6 +13,22 @@ const state = {
 
 const TOKEN_KEY = 'qcluster.token';
 const getToken = () => localStorage.getItem(TOKEN_KEY) || '';
+
+const STATE_LABELS = {
+  discovered: 'not provisioned',
+  provisioning: 'provisioning…',
+  ready: 'ready',
+  error: 'error',
+  lost: 'lost',
+  decommissioned: 'decommissioned',
+};
+const STATE_HINTS = {
+  discovered: 'Detected but not yet provisioned — no runtime pushed, RPC server not running. It cannot take model layers yet.',
+  provisioning: 'Runtime and RPC server are being set up on this board.',
+  error: 'Provisioning failed. See the error below, or try Reprovision.',
+  lost: 'The board is no longer visible over ADB.',
+  decommissioned: 'Removed from cluster management. Recommission to bring it back.',
+};
 const setToken = (value) => value
   ? localStorage.setItem(TOKEN_KEY, value)
   : localStorage.removeItem(TOKEN_KEY);
@@ -124,6 +140,8 @@ function renderNodes(data) {
     const cpu = s.cpu_percent ?? 0;
     const ram = s.mem_percent ?? 0;
     const temp = s.temp_c != null ? `${s.temp_c} °C` : '—';
+    const stateLabel = STATE_LABELS[node.state] || node.state;
+    const stateTitle = STATE_HINTS[node.state] || '';
     const actions = `
       <div class="card-actions">
         ${identifyButton(node)}
@@ -138,7 +156,7 @@ function renderNodes(data) {
             <div class="card-title">${node.role === 'host' ? 'Host board' : `Board ${node.slot}`}</div>
             <div class="card-sub">${node.serial}</div>
           </div>
-          <span class="pill ${node.state}">${node.state}</span>
+          <span class="pill ${node.state}" title="${stateTitle}">${stateLabel}</span>
         </div>
         <div class="meter">
           <div class="meter-label"><span>CPU</span><span>${cpu.toFixed(0)}%</span></div>
@@ -155,6 +173,8 @@ function renderNodes(data) {
           ${node.role === 'host' ? '' : `<span>rpc ${node.rpc_running ? 'up' : 'down'} :${node.rpc_host_port}</span>`}
         </div>
         ${node.error ? `<div class="card-foot" style="color:var(--danger)">${node.error}</div>` : ''}
+        ${(node.state === 'discovered' || node.state === 'provisioning') && node.role !== 'host'
+          ? `<div class="card-foot" style="color:var(--warn)">${stateTitle}</div>` : ''}
         ${actions}
       </div>`;
   }).join('');
@@ -327,6 +347,7 @@ document.addEventListener('click', async (event) => {
     else if (d.unload || target.id === 'engine-stop') await api('/api/engine/stop', { method: 'POST' });
     else if (d.load) await loadModel(d.load);
     else if (target.id === 'rescan') await api('/api/nodes/rescan', { method: 'POST' });
+    else if (target.id === 'provision-all') await api('/api/nodes/provision-all', { method: 'POST' });
   } catch (err) {
     alert(err.message);
   }
@@ -533,6 +554,41 @@ setInterval(async () => {
 }, 2000);
 
 /* ---------- chat ---------- */
+const BENCHMARK_PROMPTS = [
+  { label: 'Speed: what is 12 + 30?', prompt: 'What is 12 + 30? Answer with just the number.' },
+  { label: 'Speed: capital of France', prompt: 'Name the capital of France in one word.' },
+  { label: 'Speed: prime check (7)', prompt: 'Is 7 a prime number? Answer yes or no.' },
+  { label: 'Reasoning: train speed', prompt: 'If a train travels 60 miles in 45 minutes, what is its speed in mph? Answer with just the number.' },
+  { label: 'Reasoning: sheep riddle', prompt: 'A farmer has 17 sheep. All but 9 are lost. How many are left? One number only.' },
+  { label: 'Reasoning: 15% of 240', prompt: 'What is 15% of 240? Just the number.' },
+  { label: 'Trap: two coins totaling 30 cents', prompt: 'I have two coins totaling 30 cents, and one is not a nickel. What are the two coins?' },
+  { label: 'Trap: bat and ball', prompt: 'A bat and a ball cost $1.10 total. The bat costs $1 more than the ball. How much does the ball cost?' },
+  { label: 'Trap: pound of feathers vs steel', prompt: 'Which is heavier: a pound of feathers or a pound of steel? One word.' },
+  { label: 'Knowledge: Pride and Prejudice author', prompt: 'Who wrote "Pride and Prejudice"? Name only.' },
+  { label: 'Knowledge: Berlin Wall year', prompt: 'What year did the Berlin Wall fall? Number only.' },
+  { label: 'Knowledge: gold symbol', prompt: 'What is the chemical symbol for gold?' },
+  { label: 'Instruction: first 4 primes', prompt: 'List the first 4 prime numbers, comma-separated.' },
+  { label: 'Instruction: reverse "language"', prompt: 'Reverse the word "language".' },
+  { label: 'Instruction: opposite of ephemeral', prompt: 'Give the opposite of "ephemeral" in one word.' },
+  { label: 'Code: 3 // 2 in Python', prompt: 'In Python, what does 3 // 2 evaluate to? Number only.' },
+  { label: 'Code: is "racecar" a palindrome?', prompt: 'Is the string "racecar" a palindrome? Yes or no.' },
+  { label: 'Italian: translate "good morning"', prompt: 'Translate "good morning" to Italian. One phrase only.' },
+  { label: 'Italian: translate "where is the train station?"', prompt: 'Translate "Where is the train station?" to Italian.' },
+  { label: 'Italian: translate a sentence to English', prompt: 'Translate this Italian sentence to English: "Mi piacerebbe un caffè, per favore."' },
+  { label: 'Italian: singular vs plural', prompt: 'What is the plural of the Italian word "amico"? One word.' },
+];
+
+$('benchmark-prompt').innerHTML = '<option value="">Choose a prompt to fill it in…</option>' +
+  BENCHMARK_PROMPTS.map((p, i) => `<option value="${i}">${p.label}</option>`).join('');
+
+$('benchmark-prompt').addEventListener('change', () => {
+  const idx = $('benchmark-prompt').value;
+  if (idx === '') return;
+  $('prompt').value = BENCHMARK_PROMPTS[idx].prompt;
+  $('prompt').focus();
+  $('benchmark-prompt').value = '';
+});
+
 function addMessage(role, text) {
   const node = document.createElement('div');
   node.className = `msg ${role}`;

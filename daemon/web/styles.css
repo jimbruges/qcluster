@@ -111,7 +111,7 @@ button.identify-active { animation: pulse 0.7s infinite; }
 .controls { display: flex; gap: 14px; align-items: flex-end; margin-bottom: 16px; flex-wrap: wrap; }
 .controls label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
 .controls label.grow { flex: 1; min-width: 240px; }
-input, textarea {
+input, textarea, select {
   background: var(--bg); border: 1px solid var(--line); color: var(--text);
   padding: 7px 10px; border-radius: 6px; font: inherit; width: 100%;
 }

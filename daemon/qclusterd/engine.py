@@ -28,6 +28,12 @@ STATE_LOADING = "loading"
 STATE_READY = "ready"
 STATE_ERROR = "error"
 
+# llama.cpp always skips CPU backends when building its tensor-split device list, so
+# the host's own share is never actually usable as a split target - only the RPC
+# endpoints are. Its hard cap is llama_max_devices() (16); passing that many (or
+# more) --tensor-split entries is rejected, so we cap at 15.
+MAX_TENSOR_SPLIT_DEVICES = 15
+
 LISTENING_RE = re.compile(r"(server is listening|HTTP server listening|starting the main loop)", re.I)
 PROGRESS_RE = re.compile(r"load_tensors:.*?(\d+)%")
 
@@ -73,9 +79,12 @@ class Placement:
         }
 
     def tensor_split(self) -> str | None:
-        if len(self.weights) < 2:
+        # Only RPC endpoints ever get a device slot for tensor-split; the host's
+        # share (appended last, see plan_placement) is never a split target.
+        n = min(len(self.endpoints), MAX_TENSOR_SPLIT_DEVICES)
+        if n < 2:
             return None
-        return ",".join(f"{w:.3f}" for w in self.weights)
+        return ",".join(f"{w:.3f}" for w in self.weights[:n])
 
 
 def plan_placement(model: Model, nodes: list, ctx_size: int | None = None,
@@ -218,7 +227,12 @@ class LlamaEngine:
             log.error("llama-server exited (%s)", code)
 
     def _await_ready(self) -> None:
-        deadline = time.time() + 900  # a big model over USB can take a while
+        # First-time loads stream the full model to every board over ADB/USB, one
+        # RPC connection at a time; with many boards this comfortably exceeds 15
+        # minutes even though it's still making progress, so scale the deadline
+        # with the endpoint count. Cached reloads (rpc-server --cache) are fast.
+        n_endpoints = len(self.placement.get("endpoints") or []) if self.placement else 0
+        deadline = time.time() + max(900, 300 * n_endpoints)
         while time.time() < deadline:
             if not self.running:
                 return

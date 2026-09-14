@@ -212,7 +212,36 @@ With four child boards attached (one 4 GB and three 2 GB), Mistral 7B Q4 loads a
 answers through the OpenAI-compatible API. It is usable as a proof of pooled memory,
 but not interactive: a 70-token response took just over four minutes.
 
-### How the fit estimate works
+### Sixteen boards: Qwen2.5-32B Q3_K_S
+
+Sixteen boards (1 host + 15 UNO Q children) pool about 17.9 GB of usable RAM. That's
+enough to run **Qwen2.5-32B-Instruct** (Q3_K_S, 13.7 GB file) — a model an order of
+magnitude past what any single board could ever hold, and requiring nearly the whole
+cluster to fit.
+
+| | Qwen2.5-32B Q3_K_S |
+|---|---|
+| Model file | 13.7 GB |
+| Boards used | 16 (1 host + 15 children) |
+| Fits the host board alone? | **no** |
+| Cold load (first time, streaming to all 15 children) | ~48 min |
+| Reload (`rpc-server --cache` hit) | ~8 min |
+| Prompt processing | 0.16 tok/s |
+| Generation | 0.13 tok/s |
+
+`--tensor-split` only ever gets one fraction per RPC device — llama.cpp's device
+table is capped at 16 entries total and never gives the host's CPU backend a slot —
+so a placement across the host + 15 children needs the split limited to the 15 RPC
+endpoints, not 16. At 16 boards this is no longer a corner case: it's the normal
+shape of a full cluster, so the placement logic drops the host's share from the
+`--tensor-split` argument (it's still counted for the RAM fit check, just never a
+split target).
+
+This is a proof that pooling scales to this size at all, not a usable chat
+experience: at ~7 s/token, even a three-word reply takes minutes, and every token
+still has to cross all 15 RPC hops.
+
+
 
 The **Fit** column and the loader share one calculation, on the server:
 
