@@ -106,6 +106,7 @@ class Gateway:
                 "reclaimed": placement.reclaimed,
                 "loaded": is_loaded,
                 "boards": len(placement.endpoints) + 1,
+                "auto_split": placement.auto_split,
             }
         return entries
 

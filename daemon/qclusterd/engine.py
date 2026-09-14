@@ -76,15 +76,30 @@ class Placement:
             "reclaimed": self.reclaimed,
             "pooled": self.pooled,
             "tensor_split": self.tensor_split(),
+            "auto_split": self.auto_split,
         }
 
     def tensor_split(self) -> str | None:
         # Only RPC endpoints ever get a device slot for tensor-split; the host's
         # share (appended last, see plan_placement) is never a split target.
-        n = min(len(self.endpoints), MAX_TENSOR_SPLIT_DEVICES)
-        if n < 2:
+        # Past MAX_TENSOR_SPLIT_DEVICES entries, llama.cpp's arg parser rejects
+        # the flag outright, so auto_split() takes over instead.
+        if len(self.endpoints) > MAX_TENSOR_SPLIT_DEVICES:
             return None
-        return ",".join(f"{w:.3f}" for w in self.weights[:n])
+        if len(self.endpoints) < 2:
+            return None
+        return ",".join(f"{w:.3f}" for w in self.weights[:len(self.endpoints)])
+
+    @property
+    def auto_split(self) -> bool:
+        """True when the endpoint count forces llama.cpp's own free-memory split.
+
+        Beyond MAX_TENSOR_SPLIT_DEVICES boards, --tensor-split can no longer be
+        passed at all, so llama.cpp falls back to splitting by each RPC device's
+        live free memory. That has no configurable safety margin (unlike
+        QCluster's reserve-aware placement), so it only kicks in past the CLI cap.
+        """
+        return len(self.endpoints) > MAX_TENSOR_SPLIT_DEVICES
 
 
 def plan_placement(model: Model, nodes: list, ctx_size: int | None = None,
@@ -187,6 +202,13 @@ class LlamaEngine:
                 split = placement.tensor_split()
                 if split:
                     argv += ["--tensor-split", split]
+                elif placement.auto_split:
+                    log.warning(
+                        "%d RPC endpoints exceeds llama.cpp's --tensor-split cap (%d); "
+                        "falling back to its own free-memory auto-split, which has no "
+                        "configurable safety margin",
+                        len(placement.endpoints), MAX_TENSOR_SPLIT_DEVICES,
+                    )
 
             env = dict(os.environ)
             env["LD_LIBRARY_PATH"] = str(config.RUNTIME_DIR) + (

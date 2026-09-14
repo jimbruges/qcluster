@@ -241,6 +241,19 @@ This is a proof that pooling scales to this size at all, not a usable chat
 experience: at ~7 s/token, even a three-word reply takes minutes, and every token
 still has to cross all 15 RPC hops.
 
+### Scaling past 16 boards
+
+`llama_max_devices()` (16) is only a limit on the `--tensor-split` **CLI flag** — the
+underlying buffer holds 128 floats, and `--rpc` itself has no device-count limit at
+all. Past 15 RPC endpoints, QCluster stops passing `--tensor-split` entirely and lets
+llama.cpp auto-balance layers by each RPC device's live free memory instead
+(`ggml_backend_dev_memory()`, queried fresh at load time). The Models tab flags this
+as *(auto-split)* in the fit indicator, because it trades away QCluster's
+reserve-aware placement — llama.cpp's own split has no configurable safety margin, so
+a board can be loaded right up to its momentary free-memory edge. Below 16 boards,
+placement is unchanged: the explicit, reserve-aware split QCluster computes from its
+own telemetry is still what runs.
+
 
 
 The **Fit** column and the loader share one calculation, on the server:
