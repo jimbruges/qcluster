@@ -170,6 +170,14 @@ class _Handler(BaseHTTPRequestHandler):
     def _known_board(self, serial: str) -> bool:
         return serial == "host" or self.gateway.registry.get(serial) is not None
 
+    def _decommission_one(self, node, remove_app: bool) -> None:
+        try:
+            self.gateway.provisioner.decommission(node, remove_app=remove_app)
+        except RuntimeError as exc:
+            log.error("decommissioning %s failed: %s", node.serial, exc)
+            return
+        STATE.set_decommissioned(node.serial, True)
+
     # -- routing --------------------------------------------------------
     def do_GET(self):  # noqa: N802
         parsed = urllib.parse.urlparse(self.path)
@@ -338,6 +346,18 @@ class _Handler(BaseHTTPRequestHandler):
                 gw.provisioner.provision_async(node)
             return self._json(202, {"ok": True, "count": len(targets)})
 
+        if path == "/api/nodes/decommission-all":
+            targets = [n for n in gw.registry.children() if n.state != STATE_DECOMMISSIONED]
+            if gw.engine.running:
+                gw.engine.stop()
+            remove_app = bool(body.get("remove_app", True))
+            for node in targets:
+                threading.Thread(
+                    target=self._decommission_one, args=(node, remove_app),
+                    name=f"decommission-{node.slot}", daemon=True,
+                ).start()
+            return self._json(202, {"ok": True, "count": len(targets)})
+
         if path == "/api/wifi/connect":
             ssid = str(body.get("ssid", "")).strip()
             password = body.get("password") or None
@@ -408,10 +428,9 @@ class _Handler(BaseHTTPRequestHandler):
                     return self._json(400, {"error": "cannot decommission the host board"})
                 if gw.engine.running:
                     gw.engine.stop()
+                remove_app = bool(body.get("remove_app", True))
                 try:
-                    message = gw.provisioner.decommission(
-                        node, remove_app=bool(body.get("remove_app", True))
-                    )
+                    message = gw.provisioner.decommission(node, remove_app=remove_app)
                 except RuntimeError as exc:
                     return self._json(502, {"error": str(exc)})
                 STATE.set_decommissioned(node.serial, True)

@@ -394,6 +394,26 @@ async function decommission(serial) {
   alert(result.message || 'Board cleaned.');
 }
 
+$('decommission-all').addEventListener('click', async () => {
+  const count = state.nodes.filter((n) => n.role !== 'host' && n.state !== 'decommissioned').length;
+  if (!count) {
+    alert('No boards to decommission.');
+    return;
+  }
+  if (!confirm(`Decommission all ${count} child board${count === 1 ? '' : 's'}? This deletes ~/qcluster from every board and stops managing them.`)) {
+    return;
+  }
+  const removeApp = confirm(
+    'Also remove the QCluster Display app on each board (full clean-up)?\n\n' +
+    'OK = remove the app too\nCancel = keep the display app installed'
+  );
+  const result = await api('/api/nodes/decommission-all', {
+    method: 'POST',
+    body: JSON.stringify({ remove_app: removeApp }),
+  });
+  alert(`Decommissioning ${result.count} board(s) in the background…`);
+});
+
 /* ---------- wifi ---------- */
 $('wifi-scan').addEventListener('click', async () => {
   $('wifi-status').textContent = 'scanning…';
