@@ -27,6 +27,31 @@ Every board shows its own live CPU and RAM utilisation on its 8×13 LED matrix.
                  └────────────────┘    └────────────────┘
 ```
 
+## Project at a glance
+
+QCluster is an advanced, experimental project for running a local LLM when model
+memory matters more than response speed. It has been tested with:
+
+- one 4 GB UNO Q host and two 2 GB UNO Q children for pooled 3B and 7B models;
+- one host plus 15 children for Qwen2.5-32B-Instruct Q3_K_S; and
+- a powered USB hub, USB data cables, and a network connection on the host board.
+
+It is not a shortcut to fast inference. Pooling increases the size of model that can
+fit in RAM; it adds USB/RPC latency at every layer boundary. See
+[Performance expectations](#performance-expectations) and
+[Measured results](#measured-results) before choosing hardware.
+
+The cluster itself needs neither Wi-Fi nor a router: ADB over USB provides shell
+access, file transfer, and the loopback network paths between the host and children.
+Only the host needs network access when downloading models or serving the dashboard
+to another device.
+
+## Project videos
+
+- [How QCluster runs a 32B-parameter model on UNO Q boards](https://youtube.com/shorts/uDDLjvYg2iI?feature=share)
+- [Measuring approximately 1 W per board during inference](https://youtube.com/shorts/2z0fbQdFPHI?feature=share)
+- [Switching a cluster board back to Workshop Mode](https://youtube.com/shorts/On5ZFprrvvk?feature=share)
+
 ## Why this shape
 
 Three constraints on a factory UNO Q image drove the design:
@@ -60,6 +85,21 @@ qcluster/
 ├── shared/qcluster_common/ LED rendering + /proc sampling, used by both sides
 └── scripts/                build, deploy, one-time USB permission setup
 ```
+
+## Hardware and software
+
+| Item | Required | Notes |
+|---|---:|---|
+| Arduino UNO Q (4 GB) | 1 | Host board; runs the dashboard and `llama-server`. |
+| Arduino UNO Q (2 GB or 4 GB) | 2–15 | Child boards; each runs `rpc-server`. More usable RAM gives the cluster more capacity. |
+| Powered USB hub | 1 | Connects the child boards to the host. |
+| USB data cables | 1 per child | The ADB connection carries provisioning, telemetry, and RPC traffic. |
+| Host network connection | 1 | Needed to download models and access the dashboard. Children intentionally do not need network access. |
+| Linux, Docker access, Git, and Python 3 | host environment | Used to build and operate the bundled runtime. |
+
+Start with a host and two children. The [3B results](#measured-results) demonstrate
+the basic pooled-memory configuration; use more boards only when the model-size goal
+justifies the slower pipeline.
 
 ## Setup
 
@@ -241,6 +281,13 @@ This is a proof that pooling scales to this size at all, not a usable chat
 experience: at ~7 s/token, even a three-word reply takes minutes, and every token
 still has to cross all 15 RPC hops.
 
+### Power draw
+
+The 16-board configuration drew approximately 15 W in total during testing, or about
+1 W per board. That draw stayed broadly constant during inference because the
+pipeline runs model layers sequentially: one board is doing the active CPU work at a
+time, rather than every board executing a layer simultaneously.
+
 ### Scaling past 15 RPC boards
 
 15 RPC endpoints is a hard ceiling, not a QCluster convention: ggml's backend
@@ -325,4 +372,9 @@ children is the cheapest way to make room for a bigger model.
 
 ## Licence
 
-MPL-2.0, matching the Arduino app examples this builds on.
+QCluster is licensed under the [Mozilla Public License 2.0](https://www.mozilla.org/MPL/2.0/)
+([SPDX: MPL-2.0](https://spdx.org/licenses/MPL-2.0.html)).
+
+This license applies only to the original QCluster source in this repository.
+Third-party software, model files, and tools used or downloaded by QCluster remain
+subject to their own licenses and notices.

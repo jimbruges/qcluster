@@ -11,3 +11,6 @@ __pycache__/
 *.gguf
 build/
 deploy/
+
+# Local publication copy
+docs/arduino-project-hub*.md
